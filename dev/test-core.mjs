@@ -274,7 +274,13 @@ console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
   ok('groupStat 에 능력치 포함', gs2.abil.speed === 4 && gs2.size === 3);
 
   ok('세부 평균 반올림 = 종합 후보', Math.round(abilAvg({ speed: 5, stamina: 4, defense: 4 })) === 4);
-  ok('종합 실력은 자동으로 안 바뀜', s7.members.byId(m1.id).skill === 3, String(s7.members.byId(m1.id).skill));
+  // v0.5.6: 종합 실력 = 간단 체크 평균 자동 (5,4,2 → 3.7)
+  ok('종합 실력 = 6항목 평균 자동', s7.members.byId(m1.id).skill === 3.7, String(s7.members.byId(m1.id).skill));
+  ok('간단 체크 없으면 기존 값 유지', s7.members.byId(m3.id).skill === 3);
+  ok('평균 바뀌면 종합도 따라감', (() => {
+    s7.members.setAbil(m1.id, { shoot: 5 }, 'owner');
+    return s7.members.byId(m1.id).skill === 4;
+  })(), String(s7.members.byId(m1.id).skill));
 
   const s8 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
   await s8.init();

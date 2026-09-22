@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.5';
+export const MODULE_VERSION = 'v0.5.6';
 
 export const SCHEMA_VERSION = 2;
 
@@ -105,6 +105,51 @@ export function matchPositionAt(tokens, i) {
   return null;
 }
 
+/**
+ * 이름 한 칸에 여러 정보가 들어간 경우를 분석한다 (정리 도구 / 회원 폼 공용).
+ * @returns {{name, team, pos, gk, birthYear, gender, reasons:string[], glued:boolean, changed:boolean}}
+ */
+export function analyzeMemberName(rawName, opts = {}) {
+  const raw = String(rawName ?? '').trim();
+  const reasons = [];
+  if (!raw) return { name: '', team: null, pos: null, gk: false, birthYear: null, gender: null, reasons, glued: false, changed: false };
+
+  // 구분자가 섞였는지 먼저 본다 (쉼표·괄호·슬래시·이중 공백)
+  if (/[,()/·|]/.test(raw)) reasons.push('구분기호');
+  if (/\s{2,}/.test(raw)) reasons.push('공백');
+
+  const parsed = parseMemberLine(raw, opts) || {};
+  if (parsed.team) reasons.push('팀 약자');
+  if (parsed.pos) reasons.push('포지션');
+  if (parsed.gender) reasons.push('성별');
+  if (parsed.birthYear) reasons.push('출생년도');
+
+  let name = parsed.name || raw;
+  let team = parsed.team || null;
+  let glued = false;
+
+  // 약자가 공백 없이 붙은 경우: "체진혜린" → 체 + 진혜린 (확인 후 적용)
+  if (!team && /^[가-힣]{3,5}$/.test(raw)) {
+    const aliases = opts.teamAliases || DEFAULT_TEAM_ALIASES;
+    for (const k of TEAM_KEYS) {
+      const a = String(aliases[k] || '').trim();
+      if (!a || a.length !== 1 || !raw.startsWith(a)) continue;
+      const rest = raw.slice(1);
+      if (rest.length >= 2 && rest.length <= 4) {
+        team = k; name = rest; glued = true; reasons.push('붙은 약자');
+        break;
+      }
+    }
+  }
+
+  const changed = !!name && (name !== raw || !!team || !!parsed.pos || !!parsed.gender || !!parsed.birthYear);
+  return {
+    name: name.trim(), team, pos: parsed.pos || null, gk: !!parsed.gk,
+    birthYear: parsed.birthYear || null, gender: parsed.gender || null,
+    reasons, glued, changed,
+  };
+}
+
 /** 이름 문자열에서 포지션 토큰만 떼어낸다 (기존 회원 정리 도구용) */
 export function splitNamePosition(rawName, opts = {}) {
   const tokens = String(rawName ?? '').split(/[\s,/()·|]+/).filter(Boolean);
@@ -159,6 +204,20 @@ export function abilAvg(abil) {
   if (!vals.length) return null;
   return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
 }
+
+/**
+ * 종합 실력 (v0.5.6부터 자동)
+ *  - 간단 체크 6항목 중 입력된 것들의 평균(소수 1자리)
+ *  - 하나도 없으면 기존 수동 값(기본 3)을 그대로 쓴다 → 화면에는 "미평가"로 표시
+ */
+export function effectiveSkill(member) {
+  const avg = abilAvg(member?.abil);
+  if (avg != null) return avg;
+  const n = Number(member?.skill);
+  return Number.isFinite(n) ? n : 3;
+}
+/** 자동 평균이 아니라 예전 수동 값을 쓰는 중인가 */
+export function isUnrated(member) { return abilAvg(member?.abil) == null; }
 
 export function emptyState() {
   return {
@@ -363,15 +422,17 @@ export function createStore(adapter = new LocalStorageAdapter()) {
   }
 
   function normalizeMember(m) {
+    const abil = normalizeAbil(m.abil);
+    const auto = abilAvg(abil);                    // 6항목 평균이 있으면 그게 종합 실력
     return {
       id: m.id || uid('m'),
       name: String(m.name ?? '').trim(),
-      skill: clampSkill(m.skill),
+      skill: auto != null ? clampSkill(auto) : clampSkill(m.skill),
       gk: !!m.gk,
       pos: ['FW', 'MF', 'DF', 'GK'].includes(m.pos) ? m.pos : 'MF',
       team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
-      abil: normalizeAbil(m.abil),           // 간단 체크 6항목 (미입력은 null)
+      abil,                                   // 간단 체크 6항목 (미입력은 null)
       gender: parseGender(m.gender),         // '남' | '여' | null
       // 평가 메타 — 3단계에서 감독 uid 가 들어갈 자리 (지금은 'owner')
       skillUpdatedAt: m.skillUpdatedAt || null,
@@ -406,7 +467,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
   }
 
   function clampSkill(v) {
-    const n = Math.round(Number(v));
+    const n = Math.round(Number(v) * 10) / 10;   // 소수 1자리 (자동 평균이 3.7 처럼 나온다)
     if (!Number.isFinite(n)) return 3;
     return Math.min(5, Math.max(1, n));
   }
@@ -472,7 +533,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         return added;
       },
       byTeam(key) { return state.members.filter((m) => m.active && m.team === key); },
-      /** 종합 실력 평가 (누가 언제 고쳤는지 기록) */
+      /** 종합 실력 직접 지정 — v0.5.6부터는 간단 체크가 비어 있을 때만 쓰인다(있으면 평균이 이긴다) */
       setSkill(id, skill, by = 'owner') {
         return api.members.update(id, { skill, skillUpdatedAt: new Date().toISOString(), skillUpdatedBy: by });
       },

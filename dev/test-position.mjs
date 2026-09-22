@@ -77,5 +77,34 @@ console.log('\n[5] 일괄 추가 반영 · JSON 왕복');
   ok('JSON 왕복', s2.members.all().length === 7 && s2.members.byTeam('A')[0].pos === 'FW');
 }
 
+
+console.log('\n[6] 이름 정리 후보 탐지 (v0.5.6 — 실증 케이스, 가명)');
+{
+  const { analyzeMemberName } = await import('../store.js');
+  const O = { teamNames: TN, teamAliases: { A: '교', B: '장', C: '청', D: '체' } };
+
+  // ① 앞 버전이 포지션만 떼어 pos 를 지정해 둔 회원 (team 비어 있음)
+  const a1 = analyzeMemberName('체 홍길동', O);
+  ok('약자+공백 — 이름/팀 분리', a1.name === '홍길동' && a1.team === 'D' && a1.changed === true, JSON.stringify(a1.reasons));
+  // ② 팀도 이미 지정된 회원 (사장님 스크린샷 상태)
+  const a2 = analyzeMemberName('교 김철수', O);
+  ok('팀이 이미 있어도 후보', a2.name === '김철수' && a2.team === 'A' && a2.changed === true);
+  // ③ 약자가 붙은 경우
+  const a3 = analyzeMemberName('체이영희', O);
+  ok('붙은 약자 추정', a3.name === '이영희' && a3.team === 'D' && a3.glued === true);
+  // ④ 나이까지 함께 있던 회원
+  const a4 = analyzeMemberName('체 박하나 95', O);
+  ok('약자+이름+나이', a4.name === '박하나' && a4.team === 'D' && a4.birthYear === 1995);
+  // ⑤ 깨끗한 이름은 후보 아님
+  ok('깨끗한 이름은 제외', analyzeMemberName('정세명', O).changed === false);
+  ok('성+이름 띄어쓰기는 제외', analyzeMemberName('홍 길동', O).changed === false);
+  // ⑥ 이름 칸에 통째로 입력
+  const a7 = analyzeMemberName('김하나 95 여 포워드', O);
+  ok('이름 칸 통째 입력 분리', a7.name === '김하나' && a7.pos === 'FW' && a7.gender === '여' && a7.birthYear === 1995);
+  ok('왜 잡혔는지 사유', a7.reasons.join('+').includes('포지션') && a7.reasons.join('+').includes('성별'), a7.reasons.join('+'));
+  // ⑦ 구분기호만 있는 경우
+  ok('구분기호 탐지', analyzeMemberName('박두리(미드)', O).reasons.includes('구분기호'));
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);
