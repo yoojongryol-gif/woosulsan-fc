@@ -8,7 +8,21 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.7';
+export const MODULE_VERSION = 'v0.5.8';
+
+/* ---------- 모듈 버전 섞임 복구 계획 (v0.5.8) ----------
+ * 배포 직후 GitHub Pages 는 파일마다 따로 퍼져서 "app.js 만 새것" 인 구간이 생긴다.
+ * 한 번만 새로고침하면 그 구간 안에서 재시도를 다 써 버리므로, 몇 번 더 기다렸다 다시 받는다.
+ */
+export const MOD_RETRY_MAX = 3;
+export function moduleFixPlan(badCount, tries, max = MOD_RETRY_MAX) {
+  const n = Number(badCount) || 0;
+  if (n <= 0) return { action: 'ok' };
+  const t = Number.isFinite(Number(tries)) ? Math.max(0, Number(tries)) : max;
+  if (t >= max) return { action: 'giveup' };
+  const attempt = t + 1;
+  return { action: 'retry', attempt, wait: 600 * attempt * attempt };  // 0.6s / 2.4s / 5.4s
+}
 
 export const META_KEY = 'woosulsan-fc:meta';   // { lastBackupAt, bannerHiddenUntil }
 

@@ -4,12 +4,12 @@ import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirt
   effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION as STORE_VERSION } from './store.js';
 import { parseRoster, matchNames } from './roster.js';
 import { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
-  MODULE_VERSION as ENV_VERSION } from './env.js';
+  moduleFixPlan, MODULE_VERSION as ENV_VERSION } from './env.js';
 import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } from './drafts.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.7';
+export const APP_VERSION = 'v0.5.8';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -2355,25 +2355,48 @@ function registerSW() {
   }).catch((e) => console.warn('[sw] 등록 실패', e));
 }
 
-/* ---------- 모듈 버전 검사 (v0.5.5) ----------
+/* ---------- 모듈 버전 검사 (v0.5.5, v0.5.8 보강) ----------
  * 2026-09-22 라이브 사고: 새 app.js 와 캐시에 남은 옛 store.js 가 섞여
  * store.club.teamAliases is not a function 으로 회원 탭이 비었다.
  * 파일이 여러 개인 ES 모듈 앱이라 "일부만 새 버전" 이 실제로 생긴다 → 부팅 때 직접 확인한다.
+ *
+ * v0.5.8 보강 — 같은 날 v0.5.7 배포 직후 재발했고, 원인이 하나 더 있었다.
+ *   GitHub Pages 는 파일마다 따로 퍼져서, 배포 직후 수 분간
+ *   "app.js 는 새것 · store.js 는 옛것" 인 구간이 실제로 존재한다.
+ *   v0.5.5 가드는 재시도가 1회뿐이라 그 구간에서 새로고침하면 1회를 다 쓰고,
+ *   두 번째 부팅에서는 토스트만 띄운 채 옛 모듈로 계속 돌았다.
+ * → ① 캐시 삭제에 더해 어긋난 파일을 cache:'reload' 로 다시 받아 HTTP 캐시까지 갱신
+ *    ② 재시도 3회 + 점점 길어지는 대기(0.6s → 1.8s → 3.6s)로 배포 구간을 넘긴다
+ *    ③ 그래도 안 되면 그때 사람이 읽을 안내를 띄운다
  */
 function checkModuleVersions() {
   const mods = { 'store.js': STORE_VERSION, 'env.js': ENV_VERSION };
   const bad = Object.entries(mods).filter(([, v]) => v !== APP_VERSION);
-  if (!bad.length) return true;
+  if (!bad.length) {
+    try { sessionStorage.removeItem(`fc-mod-reload:${APP_VERSION}`); sessionStorage.removeItem('fc-mod-reload'); } catch (e) { /* 무시 */ }
+    return true;
+  }
   console.warn('[app] 모듈 버전 불일치', bad, '기대값', APP_VERSION);
-  const once = 'fc-mod-reload';
-  if (sessionStorage.getItem(once) === APP_VERSION) {
-    toast('앱 파일이 섞여 있습니다. 새로고침해 주세요', 'err');
+
+  const key = `fc-mod-reload:${APP_VERSION}`;
+  let tries = NaN;   // 저장소가 막혔으면 NaN → moduleFixPlan 이 giveup 으로 받아 무한 새로고침을 막는다
+  try { tries = Number(sessionStorage.getItem(key)) || 0; } catch (e) { tries = NaN; }
+  const plan = moduleFixPlan(bad.length, tries);
+  if (plan.action !== 'retry') {
+    toast('앱 파일이 아직 섞여 있습니다. 잠시 뒤 새로고침해 주세요', 'err');
     return false;
   }
-  sessionStorage.setItem(once, APP_VERSION);
-  caches.keys()
-    .then((ks) => Promise.all(ks.filter((k) => k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k))))
+  try { sessionStorage.setItem(key, String(plan.attempt)); }
+  catch (e) { toast('앱 파일이 섞여 있습니다. 새로고침해 주세요', 'err'); return false; }   // 기록을 못 하면 재시도가 무한루프가 된다
+  const wait = plan.wait;
+  Promise.resolve()
+    .then(() => caches.keys()
+      .then((ks) => Promise.all(ks.filter((k) => k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k)))))
     .catch(() => {})
+    // HTTP 캐시(브라우저·CDN)에 남은 옛 파일까지 강제로 다시 받는다
+    .then(() => Promise.all(bad.map(([f]) => fetch(f, { cache: 'reload' }).catch(() => null))))
+    .catch(() => {})
+    .then(() => new Promise((r) => setTimeout(r, wait)))
     .then(() => location.reload());
   return false;
 }

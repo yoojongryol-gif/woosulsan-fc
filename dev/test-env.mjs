@@ -127,5 +127,23 @@ console.log('\n[5] 디바운스');
   ok('취소하면 실행 안 됨', calls === 1);
 }
 
+console.log('\n[모듈 버전 섞임 복구 계획 (v0.5.8)]');
+{
+  const { moduleFixPlan, MOD_RETRY_MAX } = await import('../env.js');
+  ok('어긋난 파일 0개면 통과', moduleFixPlan(0, 0).action === 'ok');
+  const p1 = moduleFixPlan(1, 0);
+  ok('1회차 = 재시도, 0.6초 대기', p1.action === 'retry' && p1.attempt === 1 && p1.wait === 600, JSON.stringify(p1));
+  const p2 = moduleFixPlan(2, 1);
+  ok('2회차 = 2.4초로 늘어남', p2.action === 'retry' && p2.attempt === 2 && p2.wait === 2400, JSON.stringify(p2));
+  const p3 = moduleFixPlan(1, 2);
+  ok('3회차 = 5.4초', p3.action === 'retry' && p3.attempt === 3 && p3.wait === 5400, JSON.stringify(p3));
+  ok('3회를 다 쓰면 포기(사람에게 안내)', moduleFixPlan(1, 3).action === 'giveup');
+  ok('그 뒤로도 계속 포기', moduleFixPlan(1, 9).action === 'giveup');
+  ok('sessionStorage 가 막혀 NaN 이면 즉시 포기', moduleFixPlan(1, NaN).action === 'giveup');
+  ok('음수 시도 횟수는 0으로 본다', moduleFixPlan(1, -5).attempt === 1);
+  ok('재시도 상한 기본값 3', MOD_RETRY_MAX === 3);
+  ok('배포 구간을 덮는 총 대기 8.4초', 600 + 2400 + 5400 === 8400);
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);
