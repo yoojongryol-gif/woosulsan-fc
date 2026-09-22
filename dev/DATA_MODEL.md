@@ -1,4 +1,4 @@
-# 웃을산 FC 데이터 모델 (schema 2, v0.3.0)
+# 웃을산 FC 데이터 모델 (schema 2, v0.4.0)
 
 저장은 `store.js` 어댑터 한 곳을 통해서만 이루어진다. 지금은 `LocalStorageAdapter`(키 `woosulsan-fc:v1`),
 나중에 같은 인터페이스(`load()` / `save(state)` / `clear()`)를 가진 `FirestoreAdapter` 로 갈아끼우면 화면 코드는 그대로다.
@@ -48,6 +48,7 @@
 - `mode: "merge"` — 고정 소속 팀을 묶어서 구성. `groups: [["A"],["B","D"],["C"]]`
   (`"none"` 은 미배정 회원 묶음). `teams[i]` 는 `groups[i]` 에 속한 참석자들.
 - `mode: "shuffle"` — 소속을 무시하고 참석자를 새로 섞음. `groups: []`, 팀 이름은 `1조·2조…`.
+- `labels: string[]` — 팀 표시 이름을 직접 지정(AI 팀 코치가 지은 "레드/블루/옐로" 등). 있으면 `groups` 라벨보다 우선.
 
 ## 4. Tactic — 전술판 (경기당 여러 장)
 
@@ -59,13 +60,34 @@
 | `formation` | string | `4-3-3` 등 |
 | `pins` | `[{ memberId, name, x, y, gk }]` | x·y 는 경기장 대비 % (0~100) |
 | `strokes` | `[{ type, color, points }]` | `type`: `free`\|`line`\|`arrow`, `points`: `[[x,y],…]` % 좌표 |
+| `note` | string | 전술 메모(AI 지시문 등) |
 | `updatedAt` | ISO string | |
+
+## 4.5 AI 설정 — **앱 데이터와 분리 저장**
+
+AI 설정은 `state` 에 **넣지 않는다**. localStorage 의 **다른 키**(`woosulsan-fc:ai`)에 따로 저장한다.
+
+```jsonc
+// localStorage["woosulsan-fc:ai"]  ← JSON 내보내기에 포함되지 않음
+{ "key": "sk-ant-...", "model": "claude-sonnet-5" }
+```
+
+| 필드 | 설명 |
+|---|---|
+| `key` | Anthropic API 키. **이 기기 브라우저에만** 저장. 저장소·코드·로그·내보내기 JSON 어디에도 포함 금지 |
+| `model` | `claude-sonnet-5`(기본) 또는 `claude-haiku-4-5`(절약) |
+
+- 내보내기(`exportJSON`)는 `state` 만 직렬화하므로 키가 섞일 수 없다(테스트 `dev/test-ai.mjs` 가 검증).
+- 호출은 브라우저에서 `https://api.anthropic.com/v1/messages` 로 직접, 헤더는
+  `x-api-key`, `anthropic-version: 2023-06-01`, `anthropic-dangerous-direct-browser-access: true`.
+- 컨텍스트로는 회원(이름·실력·포지션·소속·출석률)과 경기 요약만 보낸다. 연락처 등 민감 필드가 생기면 `memberBrief()` 에서 제외할 것.
 
 ## 5. 마이그레이션 규칙 (store.js `migrate()`)
 
 - `member.team` 이 없으면 `null`(미배정). 기존 v0.1~0.2 데이터는 그대로 열린다.
 - `club.teamNames` 없으면 기본값 `A팀~D팀`.
 - `match.teamCount` 가 범위를 벗어나면 2, `teamPlan` 없으면 `null`(옛 `teams` 는 merge 로 간주해 라벨만 `1조…`로 표시).
+- `teamPlan.labels` 없으면 `[]` (라벨 없으면 `groups` 로 이름 생성).
 - 알 수 없는 필드는 버려지므로, 새 필드는 반드시 `normalizeMember` / `normalizeMatch` 에 추가할 것.
 
 ## 6. Firestore 이관 시 대응 (예정)

@@ -52,7 +52,7 @@ export function layout(preset, players) {
 
 export function initTactics(ctx) {
   const { store, ui, toast, esc, confirmDialog, shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS,
-    APP_VERSION, groupLabel, groupColor, currentPlan } = ctx;
+    APP_VERSION, groupLabel, groupColor, currentPlan, labelOf, AI, aiRun, aiCostLine } = ctx;
   const root = document.getElementById('view-tactics');
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -83,7 +83,7 @@ export function initTactics(ctx) {
     if (plan?.teams?.length) {
       plan.teams.forEach((ids, i) => opts.push({
         idx: i,
-        label: `오늘 · ${groupLabel(plan.groups[i], i, plan.mode)}`,
+        label: `오늘 · ${labelOf(plan, i)}`,
         color: groupColor(plan.groups[i], i, plan.mode),
         ids,
       }));
@@ -153,9 +153,16 @@ export function initTactics(ctx) {
         <button class="btn grow" id="t-reset">포메이션 다시 배치</button>
         <button class="btn grow primary" id="t-save">${t.editingId ? '전술 저장' : '전술 저장'}</button>
       </div>
+      ${t.note ? `<div class="card flat" style="margin-top:10px;padding:12px">
+        <div style="font-size:12px;font-weight:800;color:var(--text-2);margin-bottom:6px">전술 메모</div>
+        <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap">${esc(t.note)}</div></div>` : ''}
       <div class="row" style="margin-top:8px">
         <button class="btn block grow" id="t-png">전술판 이미지 저장</button>
-      </div>`}
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn block grow ai" id="t-ai">✦ AI 전술 추천</button>
+      </div>
+      <div id="ai-tactics-box"></div>`}
       <div class="section-title">저장된 전술 <span class="count">${saved.length}</span></div>
       ${saved.length ? saved.map((s) => `
         <div class="match-row">
@@ -330,7 +337,7 @@ export function initTactics(ctx) {
         const title = $('#f-title', m).value.trim() || `${t.formation} 전술`;
         const saved = store.tactics.save({
           id: t.editingId || undefined,
-          matchId: g.id, team: t.teamIdx, teamLabel: t.teamLabel, formation: t.formation, title,
+          matchId: g.id, team: t.teamIdx, teamLabel: t.teamLabel, formation: t.formation, title, note: t.note || '',
           pins: t.pins.map((p) => ({ ...p })), strokes: t.strokes.map((s) => ({ ...s, points: s.points.map((q) => [...q]) })),
         });
         t.editingId = saved.id; t.title = title;
@@ -347,7 +354,7 @@ export function initTactics(ctx) {
     t.matchId = s.matchId; t.teamIdx = s.team; t.formation = s.formation; t.teamLabel = s.teamLabel;
     t.pins = (s.pins || []).map((p) => ({ ...p }));
     t.strokes = (s.strokes || []).map((x) => ({ ...x, points: (x.points || []).map((q) => [...q]) }));
-    t.title = s.title; t.editingId = s.id;
+    t.title = s.title; t.editingId = s.id; t.note = s.note || '';
     render();
     toast(`"${s.title}" 불러옴`);
   }
@@ -427,6 +434,88 @@ export function initTactics(ctx) {
     await shareOrDownload(new File([blob], `웃을산FC_${g.date}_전술.png`, { type: 'image/png' }), blob);
   }
 
+  /* ---------- AI 전술 추천 ---------- */
+  function aiTacticsModal() {
+    const g = currentMatch();
+    const players = playersOf(g);
+    if (players.length < 3) { toast('선수가 더 필요합니다', 'err'); return; }
+    if (!AI.hasKey()) { document.getElementById('ai-tactics-box').innerHTML = ctx.aiKeyNotice(); return; }
+    ctx.openModal(`
+      <h3>AI 전술 추천</h3>
+      <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">${esc(t.teamLabel || '팀')} · ${players.length}명 기준으로 포메이션과 자리, 지시를 받아옵니다.</div>
+      <div class="field"><label>상대 특징 / 우리 약점 (선택)</label>
+        <input type="text" id="f-ai-note" placeholder="예: 상대 공격수가 빠름, 우리는 수비 뒷공간이 약함"></div>
+      <div id="ai-tac-modal-box"></div>
+      <div class="foot">
+        <button class="btn ghost" data-act="close">닫기</button>
+        <button class="btn primary" data-act="go">추천 받기</button>
+      </div>`, (m) => {
+      m.addEventListener('click', async (e) => {
+        const act = e.target.closest('[data-act]')?.dataset.act;
+        if (act === 'close') return ctx.closeModal();
+        if (act !== 'go') return;
+        const note = m.querySelector('#f-ai-note').value.trim();
+        const formations = presetsFor(players.length).map((x) => x.name);
+        const r = await aiRun('#ai-tac-modal-box', 'AI가 전술을 짜는 중',
+          AI.tacticsPrompt({ players, teamLabel: t.teamLabel || '팀', formations, note }),
+          (res) => {
+            const j = res.json;
+            t._aiSuggestion = j;
+            const pins = Array.isArray(j.pins) ? j.pins : [];
+            return `<div class="ai-card">
+              <div class="ai-head"><b>${esc(j.formation || '')} 추천</b></div>
+              <div class="ai-body">
+                ${AI.renderMini((j.instructions || []).map((x) => '- ' + x).join('\n'), esc)}
+                <div class="ai-sub">자리 배치</div>
+                <div class="s">${esc(pins.map((p) => `${p.name}(${p.role || '-'})`).join(', '))}</div>
+              </div>
+              <div class="row" style="padding:0 12px 12px">
+                <button class="btn primary grow" data-act="apply">전술판에 적용</button>
+              </div>
+              ${aiCostLine(res)}
+            </div>`;
+          }, { json: true });
+        if (!r) return;
+        m.querySelector('[data-act="apply"]')?.addEventListener('click', () => {
+          applyAITactic(t._aiSuggestion, players);
+          ctx.closeModal();
+        });
+      });
+    });
+  }
+
+  /** AI 응답(0~1 좌표) → 핀 배치 + 지시문 메모 */
+  function applyAITactic(j, players) {
+    if (!j) return;
+    const byName = new Map(players.map((p) => [p.name, p]));
+    const used = new Set();
+    const pins = [];
+    for (const raw of j.pins || []) {
+      const p = byName.get(String(raw.name || '').trim());
+      if (!p || used.has(p.id)) continue;
+      used.add(p.id);
+      pins.push({
+        memberId: p.id, name: p.name, gk: !!p.gk,
+        x: Math.min(97, Math.max(3, Number(raw.x) * 100 || 50)),
+        y: Math.min(98, Math.max(4, Number(raw.y) * 100 || 50)),
+        role: raw.role || '',
+      });
+    }
+    // 빠진 선수는 대기줄에
+    const rest = players.filter((p) => !used.has(p.id));
+    rest.forEach((p, i) => pins.push({
+      memberId: p.id, name: p.name, gk: !!p.gk,
+      x: Math.round(((i + 1) * 100) / (rest.length + 1)), y: 95,
+    }));
+    if (!pins.length) { toast('적용할 자리가 없습니다', 'err'); return; }
+    if (j.formation && PRESETS.some((x) => x.name === j.formation)) t.formation = j.formation;
+    t.pins = pins;
+    t.note = (j.instructions || []).join('\n');
+    t.title = t.title || `AI ${j.formation || ''} 전술`;
+    render();
+    toast(`AI 전술 적용 (빠진 선수 ${rest.length}명은 대기줄)`);
+  }
+
   /* ---------- 이벤트 ---------- */
   root.addEventListener('click', async (e) => {
     const el = e.target;
@@ -445,6 +534,7 @@ export function initTactics(ctx) {
     if (el.closest('#t-reset')) return resetLayout(true);
     if (el.closest('#t-save')) return saveTactic();
     if (el.closest('#t-png')) return exportPNG();
+    if (el.closest('#t-ai')) return aiTacticsModal();
     const ld = el.closest('[data-load]');
     if (ld) return loadTactic(ld.dataset.load);
     const dl = el.closest('[data-del]');

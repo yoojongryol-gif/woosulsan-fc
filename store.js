@@ -112,7 +112,11 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       teams: Array.isArray(x.teams) ? x.teams : [],
       // 오늘의 팀 구성 방식: 고정 팀 합치기(merge) 또는 소속 무시 재배분(shuffle)
       teamPlan: x.teamPlan && typeof x.teamPlan === 'object'
-        ? { mode: x.teamPlan.mode === 'shuffle' ? 'shuffle' : 'merge', groups: Array.isArray(x.teamPlan.groups) ? x.teamPlan.groups : [] }
+        ? {
+          mode: x.teamPlan.mode === 'shuffle' ? 'shuffle' : 'merge',
+          groups: Array.isArray(x.teamPlan.groups) ? x.teamPlan.groups : [],
+          labels: Array.isArray(x.teamPlan.labels) ? x.teamPlan.labels.map(String) : [], // AI가 지은 팀 이름
+        }
         : null,
       attendance: x.attendance && typeof x.attendance === 'object' ? x.attendance : {},
       createdAt: x.createdAt || new Date().toISOString(),

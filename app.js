@@ -1,8 +1,9 @@
 /* 웃을산 FC — 앱 본체 */
 import { createStore, LocalStorageAdapter, TEAM_KEYS } from './store.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
+import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.3.0';
+export const APP_VERSION = 'v0.4.0';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -120,6 +121,7 @@ const ICON = {
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>',
   shuffle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 18 5-5 4 4 3-2.5 4 3.5"/></svg>',
+  ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 13.5 8 18 9.5 13.5 11 12 15.8 10.5 11 6 9.5 10.5 8 12 3.2Z"/><path d="M18.5 15.5 19.2 17.6 21.3 18.3 19.2 19 18.5 21.1 17.8 19 15.7 18.3 17.8 17.6 18.5 15.5Z"/><path d="M5.5 14 6 15.6 7.6 16.1 6 16.6 5.5 18.2 5 16.6 3.4 16.1 5 15.6 5.5 14Z"/></svg>',
   ball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m12 7 4 2.8-1.5 4.7h-5L8 9.8 12 7z" fill="currentColor" stroke="none" opacity=".3"/><path d="M12 3v4M3.6 9.6 8 9.8M20.4 9.6 16 9.8M6.5 19.6 9.5 14.5M17.5 19.6 14.5 14.5"/></svg>',
 };
 
@@ -129,6 +131,237 @@ const LOGO = `<svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
   <circle cx="24" cy="24" r="11" fill="none" stroke="#fff" stroke-width="2" opacity=".55"/>
   <path d="M24 15.5 31 20.6l-2.7 8.2h-8.6L17 20.6 24 15.5Z" fill="#fff"/>
 </svg>`;
+
+/* ================= AI ================= */
+const aiState = { controller: null, history: [] };
+
+function aiKeyNotice(extra = '') {
+  return `<div class="ai-card notice">
+    <div class="t">AI 기능을 쓰려면 API 키가 필요합니다</div>
+    <div class="s">회원 탭 → 맨 아래 <b>AI 설정</b>에서 Anthropic API 키를 한 번만 넣어 주세요. 키는 이 기기에만 저장됩니다.${extra}</div>
+    <button class="btn sm" data-go="members">설정으로 이동</button>
+  </div>`;
+}
+function aiSkeleton(label) {
+  return `<div class="ai-card loading">
+    <div class="ai-head"><span class="spin"></span><b>${esc(label)}</b>
+      <button class="btn sm ghost" data-ai-cancel style="margin-left:auto">취소</button></div>
+    <div class="sk"></div><div class="sk"></div><div class="sk short"></div>
+  </div>`;
+}
+function aiErrorCard(e) {
+  const hint = e.kind === 'no_key' ? aiKeyNotice() : '';
+  if (e.kind === 'cancelled') return '';
+  return hint || `<div class="ai-card err">
+    <div class="t">AI 호출 실패${e.status ? ` (${e.status})` : ''}</div>
+    <div class="s">${esc(e.message)}</div>
+    ${e.detail ? `<div class="s dim">${esc(String(e.detail).slice(0, 160))}</div>` : ''}
+  </div>`;
+}
+function aiCostLine(r) {
+  const cost = AI.formatCost(r.costUsd);
+  return `<div class="ai-foot">${esc(r.model)}${cost ? ' · ' + esc(cost) : ''}${r.truncated ? ' · <b>응답이 잘렸습니다</b>' : ''}</div>`;
+}
+
+/** 공통 실행기: 로딩 → 결과/오류 렌더. render(r) 는 HTML 문자열을 돌려준다. */
+async function aiRun(boxSel, label, prompt, render, { json = false } = {}) {
+  const box = $(boxSel);
+  if (!box) return null;
+  if (!AI.hasKey()) { box.innerHTML = aiKeyNotice(); return null; }
+  aiState.controller?.abort();
+  const ctrl = new AbortController();
+  aiState.controller = ctrl;
+  box.innerHTML = aiSkeleton(label);
+  let cancelled = false;
+  box.querySelector('[data-ai-cancel]')?.addEventListener('click', () => {
+    cancelled = true;
+    ctrl.abort();
+    box.innerHTML = '';   // 네트워크가 늦게 응답해도 화면은 바로 닫는다
+  });
+  try {
+    const r = json
+      ? await AI.askJSON({ ...prompt, signal: ctrl.signal })
+      : await AI.callClaude({ ...prompt, signal: ctrl.signal });
+    if (cancelled) return null;
+    box.innerHTML = render(r);
+    return r;
+  } catch (e) {
+    if (cancelled || e.kind === 'cancelled') return null;
+    box.innerHTML = aiErrorCard(e);
+    toast(e.message, 'err');
+    return null;
+  } finally {
+    if (aiState.controller === ctrl) aiState.controller = null;
+  }
+}
+
+function aiTextCard(title, text, r, { copyId = 'ai-copy-' + Math.random().toString(36).slice(2, 7) } = {}) {
+  return `<div class="ai-card">
+    <div class="ai-head"><b>${esc(title)}</b>
+      <button class="btn sm" data-copy="${copyId}" style="margin-left:auto">복사</button>
+      <button class="btn sm" data-share="${copyId}">공유</button></div>
+    <div class="ai-body" id="${copyId}">${AI.renderMini(text, esc)}</div>
+    ${aiCostLine(r)}
+  </div>`;
+}
+
+/* ---------- 1) AI 팀 코치 ---------- */
+async function aiTeamCoach() {
+  const g = store.matches.byId(ui.teamMatchId);
+  if (!g) return;
+  const att = store.matches.teamAttendance(g.id);
+  const total = TEAM_KEYS.reduce((n, k) => n + att[k].length, 0) + att.none.length;
+  if (total < 4) { toast('참석자가 더 필요합니다', 'err'); return; }
+  const byTeam = {};
+  for (const k of TEAM_KEYS) if (att[k].length) byTeam[k] = att[k];
+  if (att.none.length) byTeam.none = att.none;
+  const plan = currentPlan(g);
+  const groupCount = ui.groupCount || plan?.teams.length || suggestGroupCount(total, Object.keys(byTeam).length);
+  const candidates = suggestMerges(byTeam, Math.min(groupCount, Object.keys(byTeam).length)).slice(0, 4);
+
+  const r = await aiRun('#ai-coach-box', 'AI 팀 코치가 보는 중', AI.teamCoachPrompt({ store, matchId: g.id, candidates, groupCount }),
+    (res) => {
+      const j = res.json;
+      const teams = Array.isArray(j.teams) ? j.teams : [];
+      const byName = new Map(store.matches.attendees(g.id).map((m) => [m.name, m]));
+      const mapped = teams.map((t) => ({
+        name: String(t.name || ''),
+        ids: (t.members || []).map((n) => byName.get(String(n).trim())?.id).filter(Boolean),
+      }));
+      const used = new Set(mapped.flatMap((t) => t.ids));
+      const missing = [...byName.values()].filter((m) => !used.has(m.id));
+      ui._aiPlan = mapped.every((t) => t.ids.length) ? mapped : null;
+      return `<div class="ai-card">
+        <div class="ai-head"><b>AI 추천 구성</b></div>
+        <div class="ai-body">
+          ${mapped.map((t, i) => `<div class="ai-team"><span class="dot" style="background:${TEAM_COLORS[i % 4]}"></span>
+            <b>${esc(t.name || (i + 1) + '조')}</b> <span class="dim">${t.ids.length}명</span>
+            <div class="s">${esc((teams[i].members || []).join(', '))}</div></div>`).join('')}
+          ${missing.length ? `<div class="warnline"><span class="chip warn">빠진 사람 ${missing.length}명</span> ${esc(missing.map((m) => m.name).join(', '))}</div>` : ''}
+          <div class="ai-sub">이유</div>${AI.renderMini((j.reasons || []).map((x) => '- ' + x).join('\n'), esc)}
+          <div class="ai-sub">주의점</div>${AI.renderMini((j.cautions || []).map((x) => '- ' + x).join('\n'), esc)}
+        </div>
+        <div class="row" style="padding:0 12px 12px">
+          <button class="btn primary grow" id="btn-ai-apply" ${ui._aiPlan && !missing.length ? '' : 'disabled'}>이 구성 적용</button>
+        </div>
+        ${aiCostLine(res)}
+      </div>`;
+    }, { json: true });
+  return r;
+}
+
+function applyAIPlan() {
+  const g = store.matches.byId(ui.teamMatchId);
+  const mapped = ui._aiPlan;
+  if (!g || !mapped) return;
+  applyPlan({
+    matchId: g.id, mode: 'shuffle', groups: [],
+    labels: mapped.map((t, i) => t.name || `${i + 1}조`),
+    teams: mapped.map((t) => [...t.ids]),
+  });
+  toast('AI 구성을 적용했습니다 (저장하려면 팀 확정 저장)');
+}
+
+/* ---------- 3) 공지문 / 총평 ---------- */
+function aiNoticeModal(matchId) {
+  const g = store.matches.byId(matchId);
+  if (!g) return;
+  const mode = g.status === '종료' ? 'review' : 'notice';
+  openModal(`
+    <h3>${mode === 'review' ? 'AI 경기 총평' : 'AI 단톡 공지문'}</h3>
+    <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">${esc(fmtDate(g.date))} ${esc(g.time || '')}${g.place ? ' · ' + esc(g.place) : ''}</div>
+    <div class="field"><label>말투</label>
+      <div class="seg-wide" id="f-tone">
+        ${['짧게', '유쾌하게', '정중하게'].map((t, i) => `<button type="button" data-tone="${t}" aria-pressed="${i === 0}">${t}</button>`).join('')}
+      </div>
+    </div>
+    <div id="ai-notice-box"></div>
+    <div class="foot">
+      <button class="btn ghost" data-act="close">닫기</button>
+      <button class="btn primary" data-act="gen">${mode === 'review' ? '총평 쓰기' : '공지문 쓰기'}</button>
+    </div>`, (m) => {
+    let tone = '짧게';
+    m.addEventListener('click', async (e) => {
+      const tb = e.target.closest('#f-tone [data-tone]');
+      if (tb) {
+        tone = tb.dataset.tone;
+        $$('#f-tone [data-tone]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === tb)));
+        return;
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') return closeModal();
+      if (act === 'gen') {
+        await aiRun('#ai-notice-box', mode === 'review' ? '총평 쓰는 중' : '공지문 쓰는 중',
+          AI.noticePrompt({ store, matchId, mode, tone }),
+          (res) => aiTextCard(mode === 'review' ? '총평' : '공지문', res.text, res));
+      }
+    });
+  });
+}
+
+/* ---------- 4) AI에게 물어보기 ---------- */
+function aiAskModal() {
+  openModal(`
+    <h3>AI에게 물어보기</h3>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">모임 데이터(회원·출석·경기)를 근거로 답합니다. 예: "출석률 낮은 사람은?", "GK 후보 누구야?"</div>
+    <textarea id="f-ask" rows="3" placeholder="궁금한 것을 적어 주세요"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm" data-q="출석률이 가장 낮은 회원 5명과 비율을 알려줘">출석률 낮은 사람</button>
+      <button class="btn sm" data-q="GK를 맡을 수 있는 회원과, GK가 부족한 팀을 알려줘">GK 후보</button>
+    </div>
+    <div id="ai-ask-box" style="margin-top:10px"></div>
+    <div class="foot">
+      <button class="btn ghost" data-act="close">닫기</button>
+      <button class="btn primary" data-act="ask">물어보기</button>
+    </div>`, (m) => {
+    const ask = async () => {
+      const q = $('#f-ask', m).value.trim();
+      if (!q) { toast('질문을 입력해 주세요', 'err'); return; }
+      const r = await aiRun('#ai-ask-box', '생각하는 중', AI.askPrompt({ store, question: q, history: aiState.history }),
+        (res) => aiTextCard('답변', res.text, res));
+      if (r) {
+        aiState.history.push({ role: 'user', content: q }, { role: 'assistant', content: r.text });
+        aiState.history = aiState.history.slice(-6); // 최근 6턴(메시지 6개)만 유지
+      }
+    };
+    m.addEventListener('click', (e) => {
+      const qb = e.target.closest('[data-q]');
+      if (qb) { $('#f-ask', m).value = qb.dataset.q; return; }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') return closeModal();
+      if (act === 'ask') ask();
+    });
+  });
+}
+
+/* ---------- AI 설정 카드 ---------- */
+function aiSettingsCard() {
+  const s = AI.getSettings();
+  return `<div class="section-title">AI 설정</div>
+    <div class="card">
+      <div class="field"><label>Anthropic API 키</label>
+        ${s.key
+          ? `<div class="keyrow"><code>${esc(AI.maskKey(s.key))}</code>
+              <button class="btn sm danger" id="btn-ai-key-del">삭제</button></div>`
+          : `<input type="password" id="f-ai-key" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+             <button class="btn block" id="btn-ai-key-save" style="margin-top:8px">키 저장</button>`}
+      </div>
+      <div class="field"><label>모델</label>
+        <div class="seg-wide" id="f-ai-model">
+          ${AI.AI_MODELS.map((m) => `<button type="button" data-model="${m.id}" aria-pressed="${s.model === m.id}">${esc(m.label)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn grow" id="btn-ai-test" ${s.key ? '' : 'disabled'}>연결 테스트</button>
+        <button class="btn grow ai" id="btn-ai-ask-2">AI에게 물어보기</button>
+      </div>
+      <div id="ai-test-box"></div>
+      <div style="font-size:12px;color:var(--text-3);line-height:1.6;margin-top:10px">
+        키는 이 기기 브라우저에만 저장되며 JSON 내보내기에 포함되지 않습니다.
+        키 발급: console.anthropic.com → API Keys. 호출 1회 비용은 보통 10~30원 수준입니다.
+      </div>
+    </div>`;
+}
 
 /* ================= 렌더 ================= */
 function render() {
@@ -185,6 +418,18 @@ function renderHome() {
   }
 
   html += `<button class="btn primary block" id="btn-new-match" style="margin-top:12px">${ICON.plus} 경기 만들기</button>`;
+  if (next) {
+    html += `<div class="row" style="margin-top:8px">
+      <button class="btn grow ai" id="btn-ai-notice" data-match="${next.id}">${ICON.ai} 단톡 공지문 쓰기</button>
+      <button class="btn grow ai" id="btn-ai-ask">${ICON.ai} AI에게 물어보기</button>
+    </div>
+    <div id="ai-home-box"></div>`;
+  } else if (store.matches.all().length) {
+    html += `<div class="row" style="margin-top:8px">
+      <button class="btn block grow ai" id="btn-ai-ask">${ICON.ai} AI에게 물어보기</button>
+    </div>
+    <div id="ai-home-box"></div>`;
+  }
 
   if (!members.length) {
     html += `<div class="section-title">시작하기</div>
@@ -216,6 +461,7 @@ function matchRow(g) {
       <div class="s">${esc(g.time || '')} · 참석 ${att}명 · ${g.teamCount}팀</div>
     </button>
     <span class="st ${esc(g.status)}">${esc(g.status)}</span>
+    <button class="btn sm ghost ai" data-ai-review="${g.id}" title="AI 글쓰기">AI</button>
     <button class="btn sm ghost" data-edit-match="${g.id}" aria-label="경기 수정">⋯</button>
   </div>`;
 }
@@ -309,6 +555,11 @@ function groupLabel(group, i, mode) {
   if (mode === 'shuffle' || !group || !group.length) return `${i + 1}조`;
   return group.map(teamName).join(' + ');
 }
+/** 구성(plan) 기준 팀 이름 — AI 가 지은 이름(labels)이 있으면 우선 */
+function labelOf(plan, i) {
+  if (plan?.labels?.[i]) return plan.labels[i];
+  return groupLabel(plan?.groups?.[i], i, plan?.mode);
+}
 function groupColor(group, i, mode) {
   if (mode === 'shuffle' || !group || !group.length) return TEAM_COLORS[i % TEAM_COLORS.length];
   const idx = TEAM_KEYS.indexOf(group[0]);
@@ -323,6 +574,7 @@ function currentPlan(g) {
       matchId: g.id,
       mode: g.teamPlan?.mode || 'merge',
       groups: g.teamPlan?.groups || [],
+      labels: g.teamPlan?.labels || [],
       teams: g.teams.map((ids) => [...ids]),
     };
   }
@@ -415,7 +667,11 @@ function renderTeam() {
   }
   html += `<div class="row" style="margin-top:8px">
     <button class="btn block grow" id="btn-shuffle-all">${ICON.shuffle} 소속 무시하고 완전 새로 섞기</button>
-  </div>`;
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button class="btn block grow ai" id="btn-ai-coach">${ICON.ai} AI 팀 코치에게 물어보기</button>
+  </div>
+  <div id="ai-coach-box"></div>`;
 
   /* 3) 오늘의 최종 구성 */
   if (!plan) {
@@ -434,7 +690,7 @@ function renderTeam() {
     const color = groupColor(plan.groups[i], i, plan.mode);
     return `<div class="team-card">
       <div class="hd" style="background:${color}">
-        <span class="t">${esc(groupLabel(plan.groups[i], i, plan.mode))}</span>
+        <span class="t">${esc(labelOf(plan, i))}</span>
         <span class="r">${t.length}명 · 전력 ${st[i].total} · GK ${st[i].gk}</span>
       </div>
       <div class="bd">
@@ -447,7 +703,7 @@ function renderTeam() {
     </div>`;
   }).join('');
   html += `<div class="row wrap" style="margin-top:4px">
-      <button class="btn grow" id="btn-reshuffle">${ICON.shuffle} 이 구성 다시 섞기</button>
+      <button class="btn grow" id="btn-reshuffle">${ICON.shuffle} 다시 섞기</button>
       <button class="btn grow primary" id="btn-save-teams">팀 확정 저장</button>
     </div>
     <div class="row" style="margin-top:8px">
@@ -555,6 +811,7 @@ function renderMembers() {
       </div>
       <button class="btn danger block" id="btn-reset" style="margin-top:12px">전체 데이터 초기화</button>
     </div>
+    ${aiSettingsCard()}
     <div class="footer-note">웃을산 FC · ${APP_VERSION} · <span id="sw-state">로컬 저장</span></div>`;
 
   root.innerHTML = html;
@@ -795,7 +1052,7 @@ async function exportTeamsPNG() {
   if (!plan?.teams?.length) { toast('먼저 팀을 나눠 주세요', 'err'); return; }
   const teams = plan.teams.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
   const st = teams.map(groupStat);
-  const labels = teams.map((_, i) => groupLabel(plan.groups[i], i, plan.mode));
+  const labels = teams.map((_, i) => labelOf(plan, i));
   const colors = teams.map((_, i) => groupColor(plan.groups[i], i, plan.mode));
   const maxRows = Math.max(...teams.map((t) => t.length));
   const W = 1080;
@@ -995,7 +1252,7 @@ function bindEvents() {
       const g = store.matches.byId(ui.teamMatchId);
       const plan = currentPlan(g);
       if (!plan) { toast('먼저 팀을 만들어 주세요', 'err'); return; }
-      store.matches.setTeams(g.id, plan.teams, plan.teams.length, { mode: plan.mode, groups: plan.groups });
+      store.matches.setTeams(g.id, plan.teams, plan.teams.length, { mode: plan.mode, groups: plan.groups, labels: plan.labels || [] });
       store.matches.update(g.id, { status: g.status === '예정' ? '확정' : g.status });
       ui.teamPlan = null;
       toast('팀을 확정 저장했습니다');
@@ -1003,6 +1260,65 @@ function bindEvents() {
       return;
     }
     if (t.closest('#btn-team-png')) return exportTeamsPNG();
+
+    // AI
+    if (t.closest('#btn-ai-coach')) return aiTeamCoach();
+    if (t.closest('#btn-ai-apply')) return applyAIPlan();
+    if (t.closest('#btn-ai-ask, #btn-ai-ask-2')) return aiAskModal();
+    const aiN = t.closest('#btn-ai-notice');
+    if (aiN) return aiNoticeModal(aiN.dataset.match);
+    const aiR = t.closest('[data-ai-review]');
+    if (aiR) return aiNoticeModal(aiR.dataset.aiReview);
+    if (t.closest('#btn-ai-key-save')) {
+      const v = $('#f-ai-key')?.value.trim();
+      if (!v) { toast('키를 입력해 주세요', 'err'); return; }
+      if (!/^sk-ant-/.test(v)) { toast('sk-ant- 로 시작하는 키여야 합니다', 'err'); return; }
+      AI.saveSettings({ key: v });
+      toast('API 키를 저장했습니다 (이 기기에만)');
+      renderMembers();
+      return;
+    }
+    if (t.closest('#btn-ai-key-del')) {
+      if (!await confirmDialog({ title: 'API 키를 삭제할까요?', body: 'AI 기능이 꺼집니다. 언제든 다시 입력할 수 있습니다.', ok: '삭제', danger: true })) return;
+      AI.clearKey();
+      toast('키를 삭제했습니다');
+      renderMembers();
+      return;
+    }
+    const aiM = t.closest('#f-ai-model [data-model]');
+    if (aiM) {
+      AI.saveSettings({ model: aiM.dataset.model });
+      $$('#f-ai-model [data-model]').forEach((b) => b.setAttribute('aria-pressed', String(b === aiM)));
+      toast('모델을 바꿨습니다');
+      return;
+    }
+    if (t.closest('#btn-ai-test')) {
+      const box = $('#ai-test-box');
+      box.innerHTML = aiSkeleton('연결 테스트 중');
+      const r = await AI.testConnection();
+      box.innerHTML = r.ok
+        ? `<div class="ai-card ok"><div class="t">✅ ${esc(r.message)}</div><div class="s">AI 기능을 바로 쓸 수 있습니다.</div></div>`
+        : `<div class="ai-card err"><div class="t">연결 실패${r.status ? ` (${r.status})` : ''}</div><div class="s">${esc(r.message)}</div></div>`;
+      return;
+    }
+    const cp = t.closest('[data-copy]');
+    if (cp) {
+      const el = document.getElementById(cp.dataset.copy);
+      const text = el ? el.innerText : '';
+      try { await navigator.clipboard.writeText(text); toast('복사했습니다'); }
+      catch (e) { toast('복사할 수 없는 브라우저입니다', 'err'); }
+      return;
+    }
+    const sh = t.closest('[data-share]');
+    if (sh) {
+      const el = document.getElementById(sh.dataset.share);
+      const text = el ? el.innerText : '';
+      try {
+        if (navigator.share) { await navigator.share({ text }); }
+        else { await navigator.clipboard.writeText(text); toast('복사했습니다'); }
+      } catch (e) { if (e?.name !== 'AbortError') toast('공유할 수 없습니다', 'err'); }
+      return;
+    }
 
     // 회원
     if (t.closest('#btn-add-member')) return memberModal(null);
@@ -1102,7 +1418,8 @@ async function main() {
   // 전술 모듈(2단계)
   import('./tactics.js')
     .then((mod) => mod.initTactics({ store, ui, switchTab, toast, esc, openModal, closeModal, confirmDialog,
-      shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS, APP_VERSION, groupLabel, groupColor, currentPlan }))
+      shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS, APP_VERSION, groupLabel, groupColor, currentPlan,
+      labelOf, AI, aiRun, aiSkeleton, aiCostLine, aiKeyNotice }))
     .catch((e) => {
       console.warn('[tactics] 준비 중', e);
       const v = $('#view-tactics');
@@ -1110,5 +1427,6 @@ async function main() {
     });
 }
 
-window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adoptSuggestion, doShuffleAll, APP_VERSION, TEAM_KEYS };
+window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adoptSuggestion, doShuffleAll,
+  APP_VERSION, TEAM_KEYS, AI, aiTeamCoach, applyAIPlan, aiNoticeModal, aiAskModal, aiState };
 main();
