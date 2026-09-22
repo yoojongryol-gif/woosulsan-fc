@@ -1,4 +1,4 @@
-# 웃을산 FC 데이터 모델 (schema 2, v0.4.1)
+# 웃을산 FC 데이터 모델 (schema 2, v0.4.2)
 
 저장은 `store.js` 어댑터 한 곳을 통해서만 이루어진다. 지금은 `LocalStorageAdapter`(키 `woosulsan-fc:v1`),
 나중에 같은 인터페이스(`load()` / `save(state)` / `clear()`)를 가진 `FirestoreAdapter` 로 갈아끼우면 화면 코드는 그대로다.
@@ -30,6 +30,7 @@
 | `pos` | `FW`\|`MF`\|`DF`\|`GK` | 선호 포지션 1개 (복수 포지션은 미구현) |
 | `team` | `A`\|`B`\|`C`\|`D`\|`null` | **고정 소속 팀**. `null` = 미배정 |
 | `birthYear` | number \| null | 출생년도(선택). 2자리 입력은 `parseBirthYear()` 가 19xx/20xx 로 보정 — 20xx 로 봐서 15세 이상이면 20xx, 아니면 19xx(19xx 가 100세 초과면 다시 20xx). 표시는 **연 나이 = 올해 - 출생년도**("90년생 · 36세") |
+| `abil` | object | **간단 체크 6항목** — `{speed, stamina, basic, shoot, defense, physical}`, 각 1~5 또는 `null`(미입력). 순서·이름 고정(`ABILITIES`). 팀 밸런스·합치기 점수에는 **쓰지 않는다**(종합 `skill` 만 사용). 폼의 "세부 평균으로 종합 실력 채우기" 버튼이 평균을 반올림해 `skill` 에 넣어 준다(자동 아님) |
 | `active` | boolean | 비활동 회원은 출석·팀 배분에서 제외 |
 | `createdAt` | ISO string | |
 
@@ -87,6 +88,7 @@ AI 설정은 `state` 에 **넣지 않는다**. localStorage 의 **다른 키**(`
 
 - `member.team` 이 없으면 `null`(미배정). 기존 v0.1~0.2 데이터는 그대로 열린다.
 - `member.birthYear` 없으면 `null`(미입력). 잘못된 값도 `null` 로 정규화된다.
+- `member.abil` 없으면 6항목 모두 `null`. 1~5 밖의 값·문자도 `null` 로 정규화된다(`normalizeAbil`).
 - `club.teamNames` 없으면 기본값 `A팀~D팀`.
 - `match.teamCount` 가 범위를 벗어나면 2, `teamPlan` 없으면 `null`(옛 `teams` 는 merge 로 간주해 라벨만 `1조…`로 표시).
 - `teamPlan.labels` 없으면 `[]` (라벨 없으면 `groups` 로 이름 생성).

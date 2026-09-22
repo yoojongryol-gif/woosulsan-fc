@@ -1,9 +1,10 @@
 /* 웃을산 FC — 앱 본체 */
-import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear } from './store.js';
+import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
+  ABILITIES, abilAvg } from './store.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.4.1';
+export const APP_VERSION = 'v0.4.2';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -552,6 +553,15 @@ function emptyMatches(msg) {
 
 /* ---------- 팀 ---------- */
 function teamName(k) { return k === 'none' ? '미배정' : store.club.teamName(k); }
+/** 팀 평균 능력치 한 줄 (입력된 사람이 없으면 표시 안 함) */
+function abilLine(a, inline = false) {
+  if (!a || !a.count) return '';
+  const parts = [['speed', '스피드'], ['stamina', '지구력'], ['defense', '수비']]
+    .filter(([k]) => a[k] != null).map(([k, label]) => `${label} ${a[k]}`);
+  if (!parts.length) return '';
+  const body = `${parts.join(' · ')}<span class="dimmer"> (${a.count}명)</span>`;
+  return inline ? `<br><span class="abil-mini">${body}</span>` : `<div class="meta abil-mini">${body}</div>`;
+}
 function groupLabel(group, i, mode) {
   if (mode === 'shuffle' || !group || !group.length) return `${i + 1}조`;
   return group.map(teamName).join(' + ');
@@ -614,6 +624,7 @@ function renderTeam() {
       <div class="meta">전력 ${s.total} · 평균 ${s.avg || 0}</div>
       <div class="meta">GK ${s.gk} · FW ${s.pos.FW} · MF ${s.pos.MF} · DF ${s.pos.DF}</div>
       ${s.ageAvg != null ? `<div class="meta">평균 나이 ${s.ageAvg}세<span class="dimmer">${s.ageCount < s.size ? ` (${s.ageCount}명 기준)` : ''}</span></div>` : ''}
+      ${abilLine(s.abil)}
       ${short.length ? `<div class="warnline">${short.map((r) => `<span class="chip warn">${r}</span>`).join(' ')}</div>`
         : '<div class="okline">경기 가능</div>'}
     </div>`;
@@ -701,7 +712,7 @@ function renderTeam() {
           <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
         </button>`).join('')}
       </div>
-      <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].ageAvg != null ? ` · 평균 ${st[i].ageAvg}세` : ''}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}</div>
+      <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].ageAvg != null ? ` · 평균 ${st[i].ageAvg}세` : ''}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}${abilLine(st[i].abil, true)}</div>
     </div>`;
   }).join('');
   html += `<div class="row wrap" style="margin-top:4px">
@@ -756,6 +767,30 @@ function teamNameModal() {
 
 
 /* ---------- 회원 ---------- */
+/** 팀별 평균 능력치 요약표 (입력된 사람 기준) */
+function teamAbilTable() {
+  const rows = TEAM_KEYS.map((k) => ({ k, members: store.members.byTeam(k) }))
+    .filter((r) => r.members.some((m) => abilAvg(m.abil) != null));
+  if (!rows.length) return '';
+  const cols = ABILITIES.map((a) => a.key);
+  return `<div class="section-title">팀별 평균 능력치</div>
+    <div class="card" style="padding:12px;overflow-x:auto">
+      <table class="abil-table">
+        <thead><tr><th>팀</th>${ABILITIES.map((a) => `<th>${esc(a.label.slice(0, 3))}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${rows.map((r) => `<tr>
+            <td class="tm">${esc(store.club.teamName(r.k))}</td>
+            ${cols.map((c) => {
+              const vals = r.members.map((m) => m.abil?.[c]).filter((v) => typeof v === 'number');
+              const v = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null;
+              return `<td${v != null && v >= 4 ? ' class="hi"' : ''}>${v == null ? '–' : v}</td>`;
+            }).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderMembers() {
   const root = $('#view-members');
   const all = store.members.all();
@@ -803,6 +838,7 @@ function renderMembers() {
   }
 
   html += `
+    ${teamAbilTable()}
     <div class="section-title">설정 · 백업</div>
     <div class="card">
       <div class="row" style="margin-bottom:8px">
@@ -922,6 +958,22 @@ function memberModal(existing) {
         <button type="button" data-tk="" aria-pressed="${!m0.team}">미배정</button>
       </div>
     </div>
+    <div class="abil-sec" id="f-abil-sec">
+      <button type="button" class="abil-head" id="f-abil-toggle" aria-expanded="true">
+        <b>간단 체크</b><span class="dim" id="f-abil-sum">${abilAvg(m0.abil) ? `평균 ${abilAvg(m0.abil)}` : '미입력'}</span><span class="caret">▾</span>
+      </button>
+      <div class="abil-body" id="f-abil-body">
+        ${ABILITIES.map((a) => `<div class="abil-row" data-abil="${a.key}">
+          <span class="nm">${a.label}${a.hint ? `<i>${a.hint}</i>` : ''}</span>
+          <span class="dots">
+            ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="dot" data-v="${n}"
+              aria-pressed="${(m0.abil?.[a.key] || 0) >= n}" aria-label="${a.label} ${n}점"></button>`).join('')}
+            <button type="button" class="clr" data-v="0" aria-label="${a.label} 지우기">×</button>
+          </span>
+        </div>`).join('')}
+        <button type="button" class="btn sm block" id="f-abil-fill" style="margin-top:8px">세부 평균으로 종합 실력 채우기</button>
+      </div>
+    </div>
     <div class="togglerow"><label for="f-gk">골키퍼 가능</label><button type="button" class="switch" id="f-gk" aria-pressed="${!!m0.gk}"></button></div>
     <div class="togglerow"><label for="f-active">활동 중</label><button type="button" class="switch" id="f-active" aria-pressed="${m0.active !== false}"></button></div>
     <div class="foot">
@@ -930,7 +982,41 @@ function memberModal(existing) {
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
     let skill = m0.skill; let pos = m0.pos; let team = m0.team || null;
+    const abil = Object.fromEntries(ABILITIES.map((a) => [a.key, m0.abil?.[a.key] ?? null]));
+    const paintAbil = () => {
+      for (const a of ABILITIES) {
+        const row = $(`[data-abil="${a.key}"]`, m);
+        if (!row) continue;
+        $$('.dot', row).forEach((b) => b.setAttribute('aria-pressed', String((abil[a.key] || 0) >= Number(b.dataset.v))));
+        row.classList.toggle('empty', abil[a.key] == null);
+      }
+      const avg = abilAvg(abil);
+      const sum = $('#f-abil-sum', m);
+      if (sum) sum.textContent = avg ? `평균 ${avg}` : '미입력';
+    };
     m.addEventListener('click', async (e) => {
+      const ab = e.target.closest('.abil-row .dot, .abil-row .clr');
+      if (ab) {
+        const key = ab.closest('.abil-row').dataset.abil;
+        const v = Number(ab.dataset.v);
+        abil[key] = v === 0 || abil[key] === v ? null : v; // 같은 점 다시 누르면 지움
+        paintAbil();
+        return;
+      }
+      if (e.target.closest('#f-abil-toggle')) {
+        const sec = $('#f-abil-sec', m);
+        const open = sec.classList.toggle('closed');
+        $('#f-abil-toggle', m).setAttribute('aria-expanded', String(!open));
+        return;
+      }
+      if (e.target.closest('#f-abil-fill')) {
+        const avg = abilAvg(abil);
+        if (!avg) { toast('먼저 세부 항목을 체크해 주세요', 'err'); return; }
+        skill = Math.min(5, Math.max(1, Math.round(avg)));
+        $$('#f-skill [data-s]', m).forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.s) === skill)));
+        toast(`종합 실력을 ${skill}로 채웠습니다 (세부 평균 ${avg})`);
+        return;
+      }
       const sb = e.target.closest('#f-skill [data-s]');
       if (sb) { skill = Number(sb.dataset.s); $$('#f-skill [data-s]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === sb))); return; }
       const tb = e.target.closest('#f-team [data-tk]');
@@ -964,7 +1050,7 @@ function memberModal(existing) {
       const birthRaw = $('#f-birth', m).value.trim();
       const birthYear = parseBirthYear(birthRaw);
       if (birthRaw && !birthYear) { toast('출생년도를 확인해 주세요 (예: 90 또는 1990)', 'err'); return; }
-      const data = { name, skill, pos, team, birthYear, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
+      const data = { name, skill, pos, team, birthYear, abil, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
       if (existing) { store.members.update(existing.id, data); toast('수정했습니다'); }
       else { store.members.add(data); toast(`${name} 님 추가`); }
       closeModal(); render();

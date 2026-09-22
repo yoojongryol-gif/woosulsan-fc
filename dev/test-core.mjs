@@ -246,5 +246,47 @@ console.log('\n[5] 나이 (v0.4.1)');
     s4.members.all().map((m) => m.birthYear).join());
 }
 
+console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
+{
+  const { ABILITIES, ABILITY_KEYS, normalizeAbil, abilAvg } = await import('../store.js');
+  const { abilAverages } = await import('../balance.js');
+  ok('항목 6개 · 순서 고정', ABILITY_KEYS.join() === 'speed,stamina,basic,shoot,defense,physical', ABILITY_KEYS.join());
+  ok('라벨', ABILITIES.map((a) => a.label).join() === '스피드,지구력,기본기,슈팅,수비,피지컬');
+
+  const n = normalizeAbil({ speed: 5, stamina: '3', basic: 0, shoot: 9, defense: 'x' });
+  ok('1~5 밖·문자는 미입력', n.speed === 5 && n.stamina === 3 && n.basic === null && n.shoot === null && n.defense === null && n.physical === null,
+    JSON.stringify(n));
+  ok('평균 = 입력된 항목만', abilAvg(n) === 4, String(abilAvg(n)));
+  ok('전부 미입력이면 null', abilAvg(normalizeAbil({})) === null);
+
+  const s7 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s7.init();
+  const m1 = s7.members.add({ name: '가', team: 'A', abil: { speed: 5, stamina: 4, defense: 2 } });
+  const m2 = s7.members.add({ name: '나', team: 'A', abil: { speed: 3, defense: 4 } });
+  const m3 = s7.members.add({ name: '다', team: 'A' });
+  ok('회원 저장 시 정규화', s7.members.byId(m1.id).abil.speed === 5 && s7.members.byId(m3.id).abil.speed === null);
+
+  const avgs = abilAverages([m1, m2, m3]);
+  ok('팀 평균 = 입력된 사람만', avgs.speed === 4 && avgs.stamina === 4 && avgs.defense === 3 && avgs.count === 2,
+    `스피드 ${avgs.speed} 지구력 ${avgs.stamina} 수비 ${avgs.defense} (${avgs.count}명)`);
+  ok('아무도 없으면 null', abilAverages([m3]).speed === null && abilAverages([m3]).count === 0);
+  const gs2 = groupStat([m1, m2, m3]);
+  ok('groupStat 에 능력치 포함', gs2.abil.speed === 4 && gs2.size === 3);
+
+  ok('세부 평균 반올림 = 종합 후보', Math.round(abilAvg({ speed: 5, stamina: 4, defense: 4 })) === 4);
+  ok('종합 실력은 자동으로 안 바뀜', s7.members.byId(m1.id).skill === 3, String(s7.members.byId(m1.id).skill));
+
+  const s8 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s8.init();
+  await s8.importJSON(JSON.stringify({ members: [{ id: 'o', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
+  ok('옛 데이터 = 전 항목 미입력', ABILITY_KEYS.every((k) => s8.members.all()[0].abil[k] === null));
+
+  const s9 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s9.init();
+  await s9.importJSON(s7.exportJSON());
+  ok('JSON 왕복 — 능력치 보존', JSON.stringify(s9.members.all()[0].abil) === JSON.stringify(s7.members.all()[0].abil),
+    JSON.stringify(s9.members.all()[0].abil));
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);

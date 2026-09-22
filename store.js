@@ -10,6 +10,33 @@ export const SCHEMA_VERSION = 2;
 export const TEAM_KEYS = ['A', 'B', 'C', 'D'];
 export const DEFAULT_TEAM_NAMES = { A: 'A팀', B: 'B팀', C: 'C팀', D: 'D팀' };
 
+/** 간단 체크 6항목 (각 1~5, 미입력 허용). 순서 고정 */
+export const ABILITIES = [
+  { key: 'speed', label: '스피드' },
+  { key: 'stamina', label: '지구력' },
+  { key: 'basic', label: '기본기', hint: '볼컨트롤·패스' },
+  { key: 'shoot', label: '슈팅' },
+  { key: 'defense', label: '수비' },
+  { key: 'physical', label: '피지컬', hint: '몸싸움' },
+];
+export const ABILITY_KEYS = ABILITIES.map((a) => a.key);
+
+export function normalizeAbil(raw) {
+  const out = {};
+  for (const k of ABILITY_KEYS) {
+    const n = Math.round(Number(raw?.[k]));
+    out[k] = Number.isFinite(n) && n >= 1 && n <= 5 ? n : null;
+  }
+  return out;
+}
+
+/** 입력된 항목만의 평균 (없으면 null) */
+export function abilAvg(abil) {
+  const vals = ABILITY_KEYS.map((k) => abil?.[k]).filter((v) => typeof v === 'number');
+  if (!vals.length) return null;
+  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+}
+
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
@@ -146,6 +173,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       pos: ['FW', 'MF', 'DF', 'GK'].includes(m.pos) ? m.pos : 'MF',
       team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
+      abil: normalizeAbil(m.abil),           // 간단 체크 6항목 (미입력은 null)
       active: m.active !== false,
       createdAt: m.createdAt || new Date().toISOString(),
     };

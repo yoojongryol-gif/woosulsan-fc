@@ -505,3 +505,38 @@ main {
 .field .hint { font-size: 11.5px; color: var(--text-3); font-weight: 600; margin-top: 5px; }
 .field .hint.bad { color: var(--danger); }
 .tstat .dimmer { color: var(--text-3); font-weight: 600; }
+
+/* ---------- v0.4.2 간단 체크 ---------- */
+.abil-sec { border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); margin-bottom: 12px; overflow: hidden; }
+.abil-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 13px; font-size: 14px; }
+.abil-head b { font-weight: 800; }
+.abil-head .dim { margin-left: auto; font-size: 12px; color: var(--text-3); font-weight: 700; }
+.abil-head .caret { color: var(--text-3); transition: transform .18s; }
+.abil-sec.closed .abil-body { display: none; }
+.abil-sec.closed .abil-head .caret { transform: rotate(-90deg); }
+.abil-body { padding: 4px 12px 12px; }
+.abil-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.abil-row .nm { flex: 1; min-width: 74px; font-size: 13.5px; font-weight: 700; }
+.abil-row .nm i { display: block; font-style: normal; font-size: 10.5px; color: var(--text-3); font-weight: 600; }
+.abil-row .dots { display: flex; gap: 4px; align-items: center; }
+.abil-row .dot {
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; border: 2px solid var(--line-strong);
+  background: var(--surface); transition: background .12s, border-color .12s, transform .1s; padding: 0;
+}
+.abil-row .dot:active { transform: scale(.9); }
+.abil-row .dot[aria-pressed="true"] { background: var(--accent); border-color: transparent; }
+.abil-row .clr { width: 30px; height: 36px; flex: 0 0 30px; color: var(--text-3); font-size: 16px; font-weight: 800; padding: 0; }
+@media (max-width: 380px) {
+  .abil-row .dot { width: 34px; height: 34px; flex-basis: 34px; }
+  .abil-row .nm { min-width: 58px; font-size: 12.5px; }
+  .abil-row .dots { gap: 3px; }
+}
+
+.abil-mini { font-weight: 700; }
+.abil-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.abil-table th, .abil-table td { padding: 6px 4px; text-align: center; white-space: nowrap; }
+.abil-table th { font-size: 11px; color: var(--text-3); font-weight: 800; border-bottom: 1px solid var(--line); }
+.abil-table td { font-weight: 700; border-bottom: 1px solid var(--line); }
+.abil-table td.tm { text-align: left; font-weight: 800; }
+.abil-table td.hi { color: var(--accent); }
+.abil-table tr:last-child td { border-bottom: none; }

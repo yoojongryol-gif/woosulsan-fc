@@ -208,6 +208,17 @@ export async function askJSON(opts) {
 /* ---------------- 앱 데이터 → 컨텍스트 요약 ---------------- */
 const GUARD = '제공된 데이터에 없는 사실(이름·기록·결과·부상 등)은 절대 지어내지 마세요. 모르면 모른다고 쓰세요.';
 
+/** 간단 체크 6항목 중 입력된 것만 (스피드/지구력/기본기/슈팅/수비/피지컬, 각 1~5) */
+function abilBrief(m) {
+  const map = { speed: '스피드', stamina: '지구력', basic: '기본기', shoot: '슈팅', defense: '수비', physical: '피지컬' };
+  const out = {};
+  for (const [k, label] of Object.entries(map)) {
+    const v = m.abil?.[k];
+    if (typeof v === 'number') out[label] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** 회원 요약 (연락처 등 민감정보는 원래 저장하지 않지만, 필요한 필드만 골라 보낸다) */
 function memberBrief(m, store) {
   const st = store.stats.attendance(m.id);
@@ -218,6 +229,7 @@ function memberBrief(m, store) {
     GK: !!m.gk,
     소속: m.team ? store.club.teamName(m.team) : '미배정',
     나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null,
+    능력치: abilBrief(m),
     출석률: st.rate == null ? null : st.rate,
   };
 }
@@ -252,9 +264,9 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
   const teams = {};
   for (const k of ['A', 'B', 'C', 'D']) {
     if (!att[k].length) continue;
-    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null }));
+    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 능력치: abilBrief(m) }));
   }
-  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null }));
+  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 능력치: abilBrief(m) }));
 
   const data = {
     경기: { 날짜: g.date, 장소: g.place || '미정' },
@@ -285,7 +297,7 @@ export function tacticsPrompt({ players, teamLabel, formations, note }) {
   const data = {
     팀: teamLabel,
     인원: players.length,
-    선수: players.map((p) => ({ 이름: p.name, 실력: p.skill, 포지션: p.pos, GK: !!p.gk })),
+    선수: players.map((p) => ({ 이름: p.name, 실력: p.skill, 포지션: p.pos, GK: !!p.gk, 능력치: abilBrief(p) })),
     선택가능_포메이션: formations,
     사용자메모: note || '',
   };

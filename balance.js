@@ -155,7 +155,19 @@ export function groupStat(players, now) {
     pos: ['FW', 'MF', 'DF'].reduce((o, k) => { o[k] = players.filter((p) => (p.pos || 'MF') === k).length; return o; }, {}),
     ageCount: ages.length,
     ageAvg: ages.length ? Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10 : null,
+    abil: abilAverages(players),
   };
+}
+
+/** 팀 평균 능력치 — 입력된 사람만. 합치기 점수에는 반영하지 않는다. */
+export function abilAverages(players, keys = ['speed', 'stamina', 'defense']) {
+  const out = {};
+  for (const k of keys) {
+    const vals = players.map((p) => p.abil?.[k]).filter((v) => typeof v === 'number');
+    out[k] = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null;
+  }
+  out.count = players.filter((p) => keys.some((k) => typeof p.abil?.[k] === 'number')).length;
+  return out;
 }
 
 /**
