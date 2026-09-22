@@ -1,15 +1,29 @@
 /* 축구&joy — 앱 본체 (저장소·URL·localStorage 키는 woosulsan-fc 그대로) */
-import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
-  ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition, analyzeMemberName,
-  effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION as STORE_VERSION } from './store.js';
-import { parseRoster, matchNames } from './roster.js';
-import { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
-  moduleFixPlan, MODULE_VERSION as ENV_VERSION } from './env.js';
-import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } from './drafts.js';
-import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
+/* ---------- 링크 안전 import (v0.5.9) ----------
+ * 배포 직후에는 app.js 만 새 버전이고 다른 파일은 옛 버전인 구간이 생긴다
+ * (GitHub Pages 는 파일별로 갱신됨). 이때 `import { 새이름 } from` 은
+ * 모듈 링크 단계에서 터져 앱이 통째로 안 뜼고(흰 화면), 버전 가드도 못 돌아간다.
+ * 네임스페이스 import + 구조분해는 없는 이름을 undefined 로 남길 뿐이라
+ * 가드가 돌아 캐시를 비우고 복구할 수 있다. 호출부는 그대로다.
+ * → 앞으로 모듈에 새 export 를 추가할 때도 이 방식을 유지할 것.
+ */
+import * as STORE_NS from './store.js';
+import * as ROSTER_NS from './roster.js';
+import * as ENV_NS from './env.js';
+import * as DRAFTS_NS from './drafts.js';
+import * as BALANCE_NS from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.8';
+const { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
+  ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition, analyzeMemberName,
+  effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION: STORE_VERSION } = STORE_NS;
+const { parseRoster, matchNames } = ROSTER_NS;
+const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
+  moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
+const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
+const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } = BALANCE_NS;
+
+export const APP_VERSION = 'v0.5.9';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -2381,9 +2395,13 @@ function checkModuleVersions() {
   const key = `fc-mod-reload:${APP_VERSION}`;
   let tries = NaN;   // 저장소가 막혔으면 NaN → moduleFixPlan 이 giveup 으로 받아 무한 새로고침을 막는다
   try { tries = Number(sessionStorage.getItem(key)) || 0; } catch (e) { tries = NaN; }
-  const plan = moduleFixPlan(bad.length, tries);
+  // env.js 자체가 옛 파일이면 moduleFixPlan 이 undefined 일 수 있다 → 최소한의 대비책
+  const fix = moduleFixPlan || ((n, t) => (Number(t) >= 3
+    ? { action: 'giveup' }
+    : { action: 'retry', attempt: (Number(t) || 0) + 1, wait: 1000 }));
+  const plan = fix(bad.length, tries);
   if (plan.action !== 'retry') {
-    toast('앱 파일이 아직 섞여 있습니다. 잠시 뒤 새로고침해 주세요', 'err');
+    showModuleMismatch(bad);   // 빈 화면으로 끝나지 않게 사람이 읽을 안내를 남긴다
     return false;
   }
   try { sessionStorage.setItem(key, String(plan.attempt)); }
@@ -2399,6 +2417,38 @@ function checkModuleVersions() {
     .then(() => new Promise((r) => setTimeout(r, wait)))
     .then(() => location.reload());
   return false;
+}
+
+/** 재시도까지 실패한 경우 — 흰 화면 대신 무슨 일인지와 다음 행동을 보여 준다 (v0.5.9) */
+function showModuleMismatch(bad) {
+  const host = document.getElementById('view-home') || document.body;
+  document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+  host.classList.add('active');
+  host.innerHTML = `
+    <div class="card" style="margin-top:20px;padding:18px">
+      <div style="font-weight:800;font-size:17px;margin-bottom:8px">앱 파일이 섞여 있습니다</div>
+      <div style="font-size:13.5px;color:var(--text-2);line-height:1.75">
+        새 버전을 받는 중에 일부 파일만 바뀜었습니다.
+        <b>명단은 그대로 있으니</b> 잠시 뒤에 아래 버튼을 눌러 주세요.
+        계속 같으면 앱을 완전히 닫았다 다시 열면 해결됩니다.
+      </div>
+      <div style="font-size:12px;color:var(--text-2);margin-top:10px">
+        앱 ${esc(APP_VERSION)} · ${esc(bad.map(([f, v]) => `${f} ${v || '버전없음'}`).join(' · '))}
+      </div>
+      <button class="btn primary block" id="btn-mod-retry" style="margin-top:14px">다시 받기</button>
+    </div>`;
+  const btn = document.getElementById('btn-mod-retry');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = '받는 중…';
+      try { sessionStorage.removeItem(`fc-mod-reload:${APP_VERSION}`); } catch (e) { /* 무시 */ }
+      caches.keys()
+        .then((ks) => Promise.all(ks.filter((k) => k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k))))
+        .catch(() => {})
+        .then(() => location.reload());
+    });
+  }
 }
 
 /* ================= 시작 ================= */

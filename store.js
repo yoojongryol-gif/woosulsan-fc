@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.8';
+export const MODULE_VERSION = 'v0.5.9';
 
 export const SCHEMA_VERSION = 2;
 
