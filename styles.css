@@ -602,3 +602,63 @@ main {
   .crow .dots .dot { width: 34px; height: 34px; flex-basis: 34px; }
   .crow .line { padding-left: 10px; gap: 6px; }
 }
+
+/* ---------- v0.5.3 저장 위치 안내 ---------- */
+.envbanner {
+  border-radius: 14px; padding: 12px 13px; margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+}
+.envbanner.tab { border-color: color-mix(in srgb, var(--t-b) 32%, transparent); background: color-mix(in srgb, var(--t-b) 8%, var(--surface)); }
+.envbanner .eb-top { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.envbanner .eb-top b { font-weight: 800; flex: 1; }
+.envbanner .eb-x { width: 28px; height: 28px; border-radius: 8px; color: var(--text-3); font-size: 13px; }
+.envbanner .eb-body { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin-top: 4px; }
+.envbanner .btn { margin: 0; }
+a.btn { text-decoration: none; }
+
+.backupcard {
+  border-radius: 14px; padding: 12px 13px; margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); background: var(--accent-soft);
+}
+.backupcard .bc-top { display: flex; align-items: baseline; gap: 8px; }
+.backupcard .bc-top b { font-weight: 800; font-size: 14px; color: var(--accent-ink); }
+.backupcard .bc-top .dim { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-weight: 700; }
+.backupcard .bc-body { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin-top: 4px; }
+
+.envcard .ec-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13.5px; }
+.envcard .ec-row .k { color: var(--text-3); font-weight: 700; font-size: 12.5px; flex: 1; }
+.envcard .ec-row b { font-weight: 800; }
+.envcard .ec-note { font-size: 12px; color: var(--text-2); line-height: 1.6; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.envcard.warn { border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.envcard.ok { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.lostline { margin-top: 10px; font-size: 12px; color: var(--warn); font-weight: 700; line-height: 1.5; }
+
+/* ---------- v0.5.3 일괄 추가 미리보기 · 이름 정리 ---------- */
+.bulkpv { margin-top: 10px; max-height: 210px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.bulkpv:empty { display: none; }
+.bulkpv .pv-head { font-size: 11.5px; font-weight: 800; color: var(--text-3); padding: 8px 10px 4px; }
+.bulkpv .pv-row { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12.5px; border-top: 1px solid var(--line); }
+.bulkpv .pv-row b { font-weight: 800; flex: 0 0 auto; }
+.bulkpv .pv-row span { color: var(--text-3); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulkpv .pv-row em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--warn); }
+.bulkpv .pv-row em.warn2 { color: var(--t-c); }
+.bulkpv .pv-row.dup b { color: var(--text-3); text-decoration: line-through; }
+.bulkpv .pv-row.bad { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.bulkpv .pv-row .tg { font-style: normal; background: var(--accent-soft); color: var(--accent-ink); border-radius: 6px; padding: 0 5px; font-size: 11px; font-weight: 800; }
+.bulkpv .pv-more { font-size: 11.5px; color: var(--text-3); padding: 6px 10px; }
+
+.fixbanner {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 11px 12px;
+  border-radius: 12px; background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+}
+.fixbanner b { font-size: 13.5px; font-weight: 800; }
+.fixbanner .s { font-size: 11.5px; color: var(--text-2); margin-top: 2px; }
+.fixbanner .btn { margin-left: auto; flex: 0 0 auto; }
+.fixrow { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.fixrow .fr-name { flex: 1; min-width: 140px; font-size: 13.5px; }
+.fixrow .fr-name .old { color: var(--text-3); text-decoration: line-through; }
+.fixrow .fr-meta { font-size: 12px; font-weight: 700; color: var(--text-2); }
+.fixrow .fr-chk { display: flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; }
+.fixrow .fr-chk input { width: 20px; height: 20px; }

@@ -1,11 +1,13 @@
 /* 웃을산 FC — 앱 본체 */
 import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
-  ABILITIES, abilAvg, GENDERS, parseGender } from './store.js';
+  ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition } from './store.js';
 import { parseRoster, matchNames } from './roster.js';
+import { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel } from './env.js';
+import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } from './drafts.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.2';
+export const APP_VERSION = 'v0.5.3';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -104,6 +106,19 @@ window.addEventListener('popstate', () => {
   if (modalStack.length) closeModal({ fromPop: true });
   else applyHash();
 });
+
+/** 모달을 닫은 뒤 다음 모달/동작을 연다.
+ *  closeModal() 의 history.back() 이 popstate 로 돌아오면서 새로 연 모달까지 닫아버리는
+ *  경합을 막는다 (v0.5.3: 붙여넣어 가져오기에서 실제로 발생). */
+function afterModalClose(fn) {
+  if (!modalStack.length) { setTimeout(fn, 0); return; }
+  let done = false;
+  const run = () => { if (done) return; done = true; window.removeEventListener('popstate', onPop); setTimeout(fn, 20); };
+  const onPop = () => run();
+  window.addEventListener('popstate', onPop);
+  closeModal();
+  setTimeout(run, 250);   // popstate 가 오지 않는 경우 대비
+}
 
 function confirmDialog({ title, body = '', ok = '확인', danger = false }) {
   return new Promise((resolve) => {
@@ -405,13 +420,190 @@ function render() {
   document.dispatchEvent(new CustomEvent('app:render'));
 }
 
+/* ---------- 실행 환경 안내 (v0.5.3) ---------- */
+function envBanner() {
+  const env = currentEnv();
+  const meta = readMeta();
+  const b = bannerFor(env, store.members.all().length, Date.now(), meta.bannerHiddenUntil);
+  if (!b) return '';
+  const actionBtn = {
+    'android-open': `<a class="btn sm primary" href="${androidChromeIntent(location.href)}">크롬으로 열기</a>`,
+    'ios-open': '<button class="btn sm primary" data-envhelp="ios-open">여는 방법</button>',
+    'ios-add': '<button class="btn sm primary" data-envhelp="ios-add">홈 화면에 추가</button>',
+    'android-add': '<button class="btn sm primary" data-envhelp="android-add">홈 화면에 추가</button>',
+  }[b.action] || '';
+  return `<div class="envbanner ${b.type}">
+    <div class="eb-top"><b>${esc(b.title)}</b>
+      <button class="eb-x" data-envclose aria-label="하루 동안 숨기기">✕</button></div>
+    <div class="eb-body">${esc(b.body)}</div>
+    <div class="row" style="margin-top:8px">${actionBtn}
+      <button class="btn sm" data-go="members">이 앱이 열린 곳 보기</button></div>
+  </div>`;
+}
+
+function backupCard() {
+  const meta = readMeta();
+  const n = store.members.all().length;
+  if (!needsBackup(n, meta.lastBackupAt)) return '';
+  return `<div class="backupcard">
+    <div class="bc-top"><b>백업해 두세요</b><span class="dim">마지막 백업 ${esc(sinceLabel(meta.lastBackupAt))}</span></div>
+    <div class="bc-body">회원 ${n}명·경기 기록이 이 기기에만 있습니다. JSON 파일로 내려받아 두면 기기를 바꿔도 그대로 옮길 수 있습니다.</div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm primary" id="btn-backup-now">지금 백업</button>
+      <button class="btn sm" data-backup-later>나중에</button>
+    </div>
+  </div>`;
+}
+
+/** 설정용: 이 앱이 열린 곳 */
+function envCard() {
+  const env = currentEnv();
+  const meta = readMeta();
+  const n = store.members.all().length;
+  const saved = store.get().updatedAt;
+  const tone = env.mode === 'standalone' ? 'ok' : (env.mode === 'inapp' ? 'warn' : '');
+  return `<div class="section-title">이 앱이 열린 곳</div>
+    <div class="card envcard ${tone}">
+      <div class="ec-row"><span class="k">지금 위치</span><b>${esc(env.label)}</b></div>
+      <div class="ec-row"><span class="k">이 저장소의 회원</span><b>${n}명</b></div>
+      <div class="ec-row"><span class="k">마지막 저장</span><b>${esc(sinceLabel(saved))}</b></div>
+      <div class="ec-row"><span class="k">마지막 백업</span><b>${esc(sinceLabel(meta.lastBackupAt))}</b></div>
+      <div class="ec-note">${env.mode === 'standalone'
+        ? '홈 화면 앱에서 쓰고 있습니다. 명단은 여기에 저장됩니다.'
+        : env.mode === 'inapp'
+          ? `${esc(env.appLabel)} 안의 브라우저는 <b>별도 저장소</b>를 씁니다. 여기서 넣은 명단은 사파리·크롬·홈 화면 앱에서 보이지 않습니다.`
+          : '브라우저 탭입니다. 홈 화면에 추가한 앱과는 저장이 분리되니 한 곳만 정해 쓰세요.'}</div>
+      <button class="btn block" id="btn-move-data" style="margin-top:10px">다른 곳으로 옮기기</button>
+    </div>`;
+}
+
+/** 옮기기 도우미 */
+function moveDataSheet() {
+  const json = store.exportJSON();
+  openModal(`
+    <h3>다른 곳으로 옮기기</h3>
+    <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
+      지금 저장소의 데이터를 통째로 꺼냅니다. 옮길 곳(홈 화면 앱·사파리 등)에서 <b>회원 탭 → JSON 가져오기</b>로 붙여넣거나 파일을 고르면 됩니다.
+    </div>
+    <div class="row wrap">
+      <button class="btn grow" data-act="copy">클립보드 복사</button>
+      <button class="btn grow" data-act="file">파일로 저장</button>
+      <button class="btn grow" data-act="share">공유</button>
+    </div>
+    <div class="hint" style="margin-top:8px">회원 ${store.members.all().length}명 · 경기 ${store.matches.all().length}건 · ${Math.round(json.length / 1024)}KB</div>
+    <div class="foot"><button class="btn primary" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'copy') {
+        try { await navigator.clipboard.writeText(json); markBackup(); toast('복사했습니다. 옮길 곳에서 붙여넣으세요'); }
+        catch (err) { toast('이 브라우저에서는 복사가 막혀 있습니다. 파일로 저장해 주세요', 'err'); }
+        return;
+      }
+      if (act === 'file') { exportJSON(); return; }
+      if (act === 'share') {
+        const file = new File([json], `woosulsan-fc_${todayStr()}.json`, { type: 'application/json' });
+        try {
+          if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: '웃을산 FC 백업' }); markBackup(); toast('공유했습니다'); }
+          else if (navigator.share) { await navigator.share({ title: '웃을산 FC 백업', text: json.slice(0, 100000) }); markBackup(); }
+          else { exportJSON(); }
+        } catch (err) { if (err?.name !== 'AbortError') exportJSON(); }
+      }
+    });
+  });
+}
+
+/** 붙여넣기로 가져오기 */
+function pasteImportSheet() {
+  openModal(`
+    <h3>붙여넣어 가져오기</h3>
+    <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
+      다른 곳에서 "클립보드 복사"한 내용을 그대로 붙여넣으세요. 파일이 있으면 아래 "파일 고르기"를 쓰면 됩니다.
+    </div>
+    <textarea id="f-paste" rows="7" placeholder='{"app":"웃을산 FC", ...}'></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn grow" data-act="file">파일 고르기</button>
+      <button class="btn grow primary" data-act="go">가져오기</button>
+    </div>
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'file') { afterModalClose(() => $('#file-import').click()); return; }
+      if (act === 'go') {
+        const text = $('#f-paste', m).value.trim();
+        if (!text) { toast('내용을 붙여넣어 주세요', 'err'); return; }
+        afterModalClose(() => importText(text));   // 닫기 → 가져오기 방식 확인 모달
+      }
+    });
+  });
+}
+
+function envHelpSheet(kind) {
+  const body = {
+    'ios-open': `<b>사파리로 여는 방법</b><br>
+      1. 화면 오른쪽 위(또는 아래) <b>⋯ / 공유</b> 버튼을 누릅니다.<br>
+      2. <b>"Safari로 열기"</b> 를 고릅니다.<br>
+      3. 사파리에서 공유 → <b>홈 화면에 추가</b> 를 하면 앱처럼 쓸 수 있습니다.`,
+    'ios-add': `<b>홈 화면에 추가 (아이폰)</b><br>
+      1. 사파리 아래 가운데 <b>공유</b> 버튼(네모에 화살표)을 누릅니다.<br>
+      2. 목록을 내려 <b>"홈 화면에 추가"</b> 를 누릅니다.<br>
+      3. 다음부터는 홈 화면 아이콘으로만 여세요. 탭과 저장이 분리됩니다.`,
+    'android-add': `<b>홈 화면에 추가 (안드로이드)</b><br>
+      1. 크롬 오른쪽 위 <b>⋮</b> 를 누릅니다.<br>
+      2. <b>"홈 화면에 추가"</b> 또는 <b>"앱 설치"</b> 를 고릅니다.<br>
+      3. 다음부터는 홈 화면 아이콘으로만 여세요.`,
+  }[kind] || '';
+  openModal(`<h3>여는 방법</h3>
+    <div style="font-size:13.5px;line-height:1.8;color:var(--text-2)">${body}</div>
+    <div class="ai-card notice" style="margin-top:12px"><div class="s">
+      옮기기 전에 <b>회원 탭 → 다른 곳으로 옮기기</b> 로 지금 데이터를 먼저 복사해 두세요.
+    </div></div>
+    <div class="foot"><button class="btn primary" data-act="close">알겠습니다</button></div>`, (m) => {
+    m.addEventListener('click', (e) => { if (e.target.closest('[data-act="close"]')) closeModal(); });
+  });
+}
+
+/* ---------- 입력 초안 (v0.5.3) ---------- */
+/** 시트 안의 입력 요소를 초안 키에 묶는다. 저장 성공 시 clearDraft(form) 호출. */
+function bindDraft(modalEl, form, selector, { onRestore } = {}) {
+  const el = $(selector, modalEl);
+  if (!el) return null;
+  let done = false;   // 저장 완료 후에는 blur 로 초안이 되살아나면 안 된다
+  const saver = debounce((v) => { if (!done) saveDraft(form, v); }, 300);
+  el.addEventListener('input', () => { if (!done) saver(el.value); });
+  el.addEventListener('blur', () => { if (!done) saveDraft(form, el.value); });
+
+  const prev = readDraft(form);
+  if (prev && prev.value && !el.value.trim()) {
+    const bar = document.createElement('div');
+    bar.className = 'draftbar';
+    bar.innerHTML = `<span>${esc(draftAgeLabel(prev.at))}에 쓰던 내용이 있습니다</span>
+      <button class="btn sm primary" data-draft="restore">복원</button>
+      <button class="btn sm ghost" data-draft="drop">버리기</button>`;
+    el.parentNode.insertBefore(bar, el);
+    bar.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-draft]')?.dataset.draft;
+      if (!act) return;
+      if (act === 'restore') { el.value = prev.value; onRestore?.(prev.value); }
+      else clearDraft(form);
+      bar.remove();
+    });
+  }
+  return { el, clear: () => { done = true; saver.cancel(); clearDraft(form); } };
+}
+
+function markBackup() { writeMeta({ lastBackupAt: new Date().toISOString() }); }
+
 /* ---------- 홈 ---------- */
 function renderHome() {
   const root = $('#view-home');
   const up = store.matches.upcoming();
   const next = up[0];
   const members = store.members.active();
-  let html = '';
+  let html = envBanner() + backupCard();
 
   if (next) {
     const att = Object.values(next.attendance).filter((v) => v === 'in').length;
@@ -447,6 +639,9 @@ function renderHome() {
       ${ICON.ball}
       <div class="big">예정된 경기가 없습니다</div>
       <div>아래 버튼으로 이번 주 경기를 만들어 주세요.</div>
+      ${store.members.all().length === 0
+        ? '<div class="lostline">이전에 넣은 명단이 안 보이나요? 회원 탭 아래 <b>"이 앱이 열린 곳"</b>을 확인해 주세요.</div>'
+        : ''}
     </div>`;
   }
 
@@ -892,6 +1087,61 @@ function coachRow(m, key) {
   </div>`;
 }
 
+/* ---------- 이름에 섞인 포지션 정리 (v0.5.3) ---------- */
+function messyNameMembers() {
+  return store.members.all().map((m) => {
+    const sp = splitNamePosition(m.name);
+    if (!sp.changed || sp.name === m.name) return null;
+    return { member: m, next: sp };
+  }).filter(Boolean);
+}
+
+function nameFixSheet() {
+  const rows = messyNameMembers();
+  if (!rows.length) { toast('이름에 포지션이 섞인 회원이 없습니다'); return; }
+  const draw = () => `
+    <h3>이름에서 포지션 분리</h3>
+    <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
+      이름 칸에 포지션이 함께 들어간 회원 ${rows.length}명입니다. 아래처럼 정리합니다.
+      이미 포지션을 직접 지정해 둔 회원은 <b>유지</b>로 두고, 바꾸려면 체크하세요.
+    </div>
+    ${rows.map((r, i) => {
+      const keep = r.member.pos !== 'MF' && r.member.pos !== r.next.pos;
+      return `<div class="fixrow">
+        <div class="fr-name"><span class="old">${esc(r.member.name)}</span> → <b>${esc(r.next.name)}</b></div>
+        <div class="fr-meta">${esc(r.next.pos || '-')}${r.next.gk ? ' · GK' : ''}
+          ${keep ? `<span class="chip warn">지금 ${esc(r.member.pos)} 유지</span>` : ''}</div>
+        <label class="fr-chk"><input type="checkbox" data-fix="${i}" ${keep ? '' : 'checked'}> 적용</label>
+      </div>`;
+    }).join('')}
+    <div class="foot">
+      <button class="btn ghost" data-act="close">닫기</button>
+      <button class="btn primary" data-act="apply">적용</button>
+    </div>`;
+  openModal(draw(), (m) => {
+    m.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act !== 'apply') return;
+      let n = 0;
+      $$('[data-fix]', m).forEach((chk) => {
+        if (!chk.checked) return;
+        const r = rows[Number(chk.dataset.fix)];
+        const patch = { name: r.next.name };
+        // 기본값(MF)이거나 사용자가 체크로 바꾸기를 택한 경우에만 포지션을 덮어쓴다
+        if (r.next.pos) patch.pos = r.next.pos;
+        if (r.next.gk) patch.gk = true;
+        store.members.update(r.member.id, patch);
+        n += 1;
+      });
+      closeModal();
+      render();
+      toast(n ? `${n}명 정리했습니다` : '선택된 회원이 없습니다', n ? '' : 'err');
+    });
+  });
+}
+
 /* ---------- 회원 ---------- */
 /** 여성 회원인데 소속 팀이 혼성팀이 아니면 안내 (오류 아님) */
 /** 평가 시각·주체 표기 */
@@ -967,6 +1217,14 @@ function renderMembers() {
     <div class="row" style="margin-bottom:10px">
       <button class="btn block grow" id="btn-coach-mode">🎽 감독 평가 화면</button>
     </div>
+    ${(() => {
+      const messy = messyNameMembers();
+      return messy.length ? `<div class="fixbanner">
+        <div><b>이름에 포지션이 섞인 회원 ${messy.length}명</b>
+          <div class="s">${esc(messy.slice(0, 3).map((r) => r.member.name).join(', '))}${messy.length > 3 ? ' 외' : ''}</div></div>
+        <button class="btn sm primary" id="btn-fix-names">분리하기</button>
+      </div>` : '';
+    })()}
     <div class="search-wrap">${ICON.search}<input id="member-q" type="search" placeholder="이름 검색" value="${esc(q)}"></div>
     <div class="teamfilter">
       <button data-mt="all" aria-pressed="${ui.memberTeam === 'all'}">전체 ${all.filter((m) => m.active).length}</button>
@@ -996,12 +1254,15 @@ function renderMembers() {
 
   html += `
     ${teamAbilTable()}
+    ${envCard()}
     <div class="section-title">설정 · 백업</div>
     <div class="card">
       <div class="row" style="margin-bottom:8px">
         <button class="btn grow" id="btn-export">JSON 내보내기</button>
         <button class="btn grow" id="btn-import">JSON 가져오기</button>
       </div>
+      <button class="btn block" id="btn-paste-import" style="margin-bottom:8px">붙여넣어 가져오기</button>
+      <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름에서 포지션 분리</button>
       <button class="btn block" id="btn-team-names-2" style="margin-bottom:8px">팀 이름 바꾸기</button>
       <input type="file" id="file-import" accept="application/json,.json" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
@@ -1059,6 +1320,7 @@ function matchModal(existing) {
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
     let tc = g.teamCount; let st = g.status;
+    const placeDraft = existing ? null : bindDraft(m, 'match-place', '#f-place');
     m.addEventListener('click', async (e) => {
       const tcb = e.target.closest('#f-tc [data-tc]');
       if (tcb) { tc = Number(tcb.dataset.tc); $$('#f-tc [data-tc]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === tcb))); return; }
@@ -1086,6 +1348,7 @@ function matchModal(existing) {
       else {
         const created = store.matches.add(data);
         ui.attendMatchId = created.id; ui.teamMatchId = created.id;
+        placeDraft?.clear();
         toast('경기를 만들었습니다');
       }
       closeModal();
@@ -1147,6 +1410,8 @@ function memberModal(existing) {
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
     let skill = m0.skill; let pos = m0.pos; let team = m0.team || null; let gender = m0.gender || null;
+    // 새 회원 입력 중 새로고침돼도 이름이 날아가지 않게 (수정 폼은 이미 저장된 값이라 제외)
+    const nameDraft = existing ? null : bindDraft(m, 'member-name', '#f-name');
     const abil = Object.fromEntries(ABILITIES.map((a) => [a.key, m0.abil?.[a.key] ?? null]));
     const paintAbil = () => {
       for (const a of ABILITIES) {
@@ -1229,7 +1494,7 @@ function memberModal(existing) {
         store.members.update(existing.id, data);
         toast('수정했습니다');
       }
-      else { store.members.add(data); toast(`${name} 님 추가`); }
+      else { store.members.add(data); nameDraft?.clear(); toast(`${name} 님 추가`); }
       closeModal(); render();
     });
   });
@@ -1237,14 +1502,16 @@ function memberModal(existing) {
 
 function bulkModal() {
   let bteam = null;
+  let draft = null;
   openModal(`
     <h3>회원 일괄 추가</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
-      이름을 한 줄에 하나씩 붙여넣으세요. 이미 있는 이름은 건너뜁니다.<br>
-      <b>이름 뒤에 출생년도·성별</b>을 붙이면 함께 저장됩니다 — 예: <code>홍길동 90</code>, <code>김철수,1988</code>, <code>이영희 92 여</code><br>
-      실력은 기본 3, GK는 나중에 회원 수정에서 지정합니다.
+      한 줄에 한 명씩 붙여넣으세요. <b>출생년도·성별·포지션</b>은 순서 상관없이 알아서 읽습니다.<br>
+      예: <code>교 진혜린 95 여 포워드</code>, <code>정성현 85 남 센터백</code>, <code>김알곡 GK</code><br>
+      줄 맨 앞 <b>팀 약자</b>(팀 이름 첫 글자)를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
     </div>
-    <textarea id="f-bulk" rows="8" placeholder="홍길동 90&#10;김철수,1988&#10;이영희"></textarea>
+    <textarea id="f-bulk" rows="7" placeholder="교 진혜린 95 여 포워드&#10;정성현 85 남 센터백&#10;김철수"></textarea>
+    <div id="bulk-preview" class="bulkpv"></div>
     <div class="field" style="margin-top:12px"><label>소속 팀 (모두 같은 팀으로)</label>
       <div class="seg-wide" id="f-bteam">
         ${TEAM_KEYS.map((k) => `<button type="button" data-tk="${k}">${esc(store.club.teamName(k))}</button>`).join('')}
@@ -1255,6 +1522,36 @@ function bulkModal() {
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">추가</button>
     </div>`, (m) => {
+    const drawPreview = () => {
+      const box = $('#bulk-preview', m);
+      if (!box) return;
+      const teamNames = Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)]));
+      const lines = $('#f-bulk', m).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      if (!lines.length) { box.innerHTML = ''; return; }
+      const exist = new Set(store.members.all().map((x) => x.name));
+      const seen = new Set();
+      box.innerHTML = `<div class="pv-head">이렇게 읽었습니다 · ${lines.length}줄</div>` + lines.slice(0, 30).map((ln) => {
+        const r = parseMemberLine(ln, { teamNames });
+        if (!r || !r.name) return `<div class="pv-row bad"><b>${esc(ln)}</b><span>이름을 못 찾았습니다</span></div>`;
+        const dup = exist.has(r.name) || seen.has(r.name);
+        seen.add(r.name);
+        const bits = [
+          r.team ? `<i class="tg">${esc(teamName(r.team))}</i>` : '',
+          r.birthYear ? `${String(r.birthYear).slice(-2)}년생` : '',
+          r.gender || '',
+          r.pos || '',
+          r.gk ? 'GK' : '',
+        ].filter(Boolean).join(' · ');
+        return `<div class="pv-row${dup ? ' dup' : ''}">
+          <b>${esc(r.name)}</b><span>${bits || '추가 정보 없음'}</span>
+          ${dup ? '<em>이미 있음</em>' : ''}
+          ${r.extraPos?.length ? `<em class="warn2">${esc(r.extraPos.join('/'))} 무시</em>` : ''}
+        </div>`;
+      }).join('') + (lines.length > 30 ? `<div class="pv-more">외 ${lines.length - 30}줄</div>` : '');
+    };
+    draft = bindDraft(m, 'bulk', '#f-bulk', { onRestore: () => drawPreview() });
+    $('#f-bulk', m).addEventListener('input', drawPreview);
+    drawPreview();
     m.addEventListener('click', (e) => {
       const tb = e.target.closest('#f-bteam [data-tk]');
       if (tb) {
@@ -1268,10 +1565,21 @@ function bulkModal() {
       // 줄바꿈으로만 나눈다 (콤마는 "이름,출생년도" 구분자일 수 있어 store 에서 판단)
       const names = $('#f-bulk', m).value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       if (!names.length) { toast('이름이 없습니다', 'err'); return; }
+      const before = store.members.all().length;
       const added = store.members.bulkAdd(names, { team: bteam });
+      const skipped = names.length - added.length;
+      draft?.clear();
       closeModal();
-      toast(`${added.length}명 추가 (중복 ${names.length - added.length}명 제외)`);
+      if (added.length) {
+        ui.memberTeam = bteam || 'all';       // 결과가 바로 보이게 해당 팀 필터로
+        ui.memberQuery = '';
+        ui.coachMode = false;
+      }
       render();
+      switchTab('members');
+      toast(added.length
+        ? `${added.length}명 추가됨 (총 ${before + added.length}명)${skipped ? ` · 중복 ${skipped}명 제외` : ''}`
+        : `추가된 사람이 없습니다 (중복 ${skipped}명)`, added.length ? '' : 'err');
     });
   });
 }
@@ -1300,6 +1608,7 @@ function rosterModal() {
       <button class="btn ghost" data-act="close">닫기</button>
       <button class="btn primary" data-act="apply" disabled>적용</button>
     </div>`, (m) => {
+    const rosterDraft = bindDraft(m, 'roster', '#f-roster');
     const preview = () => {
       const box = $('#roster-preview', m);
       if (!parsed) { box.innerHTML = ''; return; }
@@ -1409,6 +1718,7 @@ function rosterModal() {
         }
         for (const r of outRows) if (r.memberId) map[r.memberId] = 'out';
         store.matches.setAttendanceBulk(g.id, map);
+        rosterDraft?.clear();
         ui.teamPlan = null;
         const outCount = Object.values(map).filter((v) => v === 'out').length;
         ui.rosterDone = { matchId: g.id, inCount, outCount, added };
@@ -1590,11 +1900,16 @@ function exportJSON() {
   a.href = url; a.download = `woosulsan-fc_${todayStr()}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+  markBackup();
   toast('JSON을 내보냈습니다');
 }
 
 async function importJSONFile(file) {
   const text = await file.text();
+  return importText(text);
+}
+
+async function importText(text) {
   const merge = await confirmDialog({
     title: '가져오기 방식',
     body: '<b>합치기</b>는 지금 데이터에 없는 회원·경기만 추가합니다.<br><b>덮어쓰기</b>는 현재 데이터를 모두 지우고 파일 내용으로 교체합니다.',
@@ -1704,7 +2019,7 @@ function bindEvents() {
       store.matches.update(g.id, { status: g.status === '예정' ? '확정' : g.status });
       ui.teamPlan = null;
       toast('팀을 확정 저장했습니다');
-      render();
+      render();   // 홈의 백업 안내도 다시 계산된다
       return;
     }
     if (t.closest('#btn-team-png')) return exportTeamsPNG();
@@ -1772,6 +2087,7 @@ function bindEvents() {
     if (t.closest('#btn-add-member')) return memberModal(null);
     if (t.closest('#btn-bulk-member')) return bulkModal();
     if (t.closest('#btn-toggle-inactive')) { ui.showInactive = !ui.showInactive; return renderMembers(); }
+    if (t.closest('#btn-fix-names, #btn-fix-names-2')) return nameFixSheet();
     if (t.closest('#btn-coach-mode')) { ui.coachMode = true; ui.coachOpen = null; return renderMembers(); }
     if (t.closest('#btn-coach-exit')) { ui.coachMode = false; return renderMembers(); }
     if (t.closest('#btn-team-names-3')) return teamNameModal();
@@ -1809,7 +2125,18 @@ function bindEvents() {
     if (me) return memberModal(store.members.byId(me.dataset.memberEdit));
 
     // 설정
-    if (t.closest('#btn-export')) return exportJSON();
+    if (t.closest('#btn-update-now')) return applyUpdateNow();
+    if (t.closest('#btn-export') || t.closest('#btn-backup-now')) return exportJSON();
+    if (t.closest('#btn-move-data')) return moveDataSheet();
+    if (t.closest('#btn-paste-import')) return pasteImportSheet();
+    if (t.closest('[data-envclose]') || t.closest('[data-backup-later]')) {
+      writeMeta({ bannerHiddenUntil: Date.now() + 24 * 60 * 60 * 1000 });
+      if (t.closest('[data-backup-later]')) writeMeta({ lastBackupAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() });
+      renderHome();
+      return;
+    }
+    const envh = t.closest('[data-envhelp]');
+    if (envh) return envHelpSheet(envh.dataset.envhelp);
     if (t.closest('#btn-import')) return $('#file-import').click();
     if (t.closest('#btn-reset')) {
       if (!await confirmDialog({ title: '전체 데이터를 지울까요?', body: '회원·경기·출석·전술이 모두 삭제됩니다. 되돌릴 수 없습니다.', ok: '다음', danger: true })) return;
@@ -1857,20 +2184,78 @@ function bindEvents() {
 }
 
 /* ================= 서비스워커 ================= */
+/* ---------- 새 버전 적용 가드 (v0.5.3) ----------
+ * 2026-09-22 사고: 새 버전이 준비되면 즉시 location.reload() 를 해서, 일괄 추가 시트에
+ * 명단을 입력하던 중이면 저장 전에 입력이 날아갈 수 있었다.
+ * → 입력 중(시트 열림/입력 포커스/초안 있음)에는 새로고침하지 않고 하단 바로 알리고,
+ *   조작이 30초 없을 때만 조용히 적용한다.
+ */
+const updater = {
+  waiting: null,       // 대기 중인 새 서비스워커
+  barShown: false,
+  lastInput: Date.now(),
+  reloading: false,
+};
+const IDLE_MS = 30000;
+
+function isBusyForUpdate() {
+  if (modalStack.length) return true;                       // 시트/모달 열림
+  const el = document.activeElement;
+  if (el && el.matches?.('input, textarea, select')) return true; // 입력 중
+  if (hasAnyDraft()) return true;                            // 저장 안 된 초안 있음
+  return false;
+}
+
+function markInteraction() { updater.lastInput = Date.now(); }
+
+function showUpdateBar() {
+  if (updater.barShown) return;
+  updater.barShown = true;
+  const bar = document.createElement('div');
+  bar.className = 'updatebar';
+  bar.id = 'update-bar';
+  bar.innerHTML = `<span>새 버전이 준비됐습니다</span>
+    <button class="btn sm primary" id="btn-update-now">지금 새로고침</button>`;
+  document.body.appendChild(bar);
+}
+
+function applyUpdateNow() {
+  if (updater.reloading) return;
+  updater.reloading = true;
+  if (updater.waiting) updater.waiting.postMessage({ type: 'SKIP_WAITING' });
+  else location.reload();
+  setTimeout(() => { if (!document.hidden) location.reload(); }, 1200); // controllerchange 가 안 오면 직접
+}
+
+function maybeAutoUpdate() {
+  if (!updater.waiting || updater.reloading) return;
+  if (isBusyForUpdate()) return;
+  if (Date.now() - updater.lastInput < IDLE_MS) return;
+  applyUpdateNow();
+}
+
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol === 'file:') return;
-  let reloading = false;
+  ['pointerdown', 'keydown', 'input', 'focusin'].forEach((ev) =>
+    document.addEventListener(ev, markInteraction, { passive: true, capture: true }));
+  setInterval(maybeAutoUpdate, 5000);
+
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return;
-    reloading = true;
+    if (updater.reloading) { location.reload(); return; }
+    // 사용자가 입력 중이면 새로고침하지 않는다 (다음 유휴 시점 또는 사용자가 바를 누를 때)
+    if (isBusyForUpdate()) { showUpdateBar(); return; }
+    updater.reloading = true;
     location.reload();
   });
   navigator.serviceWorker.register('./sw.js').then((reg) => {
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
       nw?.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller) nw.postMessage({ type: 'SKIP_WAITING' });
+        if (nw.state !== 'installed' || !navigator.serviceWorker.controller) return;
+        updater.waiting = nw;                 // 바로 적용하지 않고 대기시킨다
+        showUpdateBar();
+        maybeAutoUpdate();
       });
     });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
@@ -1883,6 +2268,7 @@ function registerSW() {
       const once = 'fc-ver-reload';
       reg.update().catch(() => {});
       if (sessionStorage.getItem(once) === APP_VERSION) return; // 한 번만
+      if (isBusyForUpdate()) { showUpdateBar(); return; }        // 입력 중이면 나중에
       sessionStorage.setItem(once, APP_VERSION);
       // 같은 도메인의 다른 앱 캐시는 건드리지 않는다 (github.io 는 origin 공유)
       caches.keys()
@@ -1919,6 +2305,9 @@ async function main() {
 
 window.__fc_hasAIKey = () => AI.hasKey();
 window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adoptSuggestion, doShuffleAll,
+  currentEnv, bannerFor, readMeta, writeMeta, needsBackup, importText, moveDataSheet, pasteImportSheet,
+  saveDraft, readDraft, clearDraft, hasAnyDraft, isBusyForUpdate, showUpdateBar, applyUpdateNow, updater,
+  parseMemberLine, splitNamePosition, messyNameMembers, nameFixSheet,
   rosterModal, parseRoster, matchNames, womenLock,
   APP_VERSION, TEAM_KEYS, AI, aiTeamCoach, applyAIPlan, aiNoticeModal, aiAskModal, aiState };
 main();

@@ -21,6 +21,80 @@ export const ABILITIES = [
 ];
 export const ABILITY_KEYS = ABILITIES.map((a) => a.key);
 
+/* ---------------- 포지션 토큰 ----------------
+ * 사장님이 실제로 붙여넣는 형식: "교 진혜린 95 여 포워드", "정지원 96 여 레프트 윙", "정성현 85 남 센터백"
+ *  - 한 단어(포워드·미들·백·골키퍼)와 두 단어(레프트 윙·라이트 백·센터 백) 모두 인식
+ *  - 레프트/라이트/센터/사이드는 수식어로 소비 (뒤 단어와 합쳐 판단)
+ *  - 토큰이 "따로 떨어져 있을 때만" 인정 → "김수비" 같은 이름은 건드리지 않는다
+ */
+export const POS_TOKENS = {
+  GK: ['gk', '골키퍼', '키퍼', '골키', '골', '지키미'],
+  DF: ['df', 'cb', 'lb', 'rb', 'wb', '수비', '수비수', '백', '센터백', '풀백', '레프트백', '라이트백',
+    '사이드백', '윙백', '중앙수비', '측면수비'],
+  MF: ['mf', 'cm', 'dm', 'am', '미들', '미드', '미드필더', '중미', '센터미드', '중앙미드', '중앙', '허리', '링커'],
+  FW: ['fw', 'st', 'cf', 'lw', 'rw', '포워드', '공격', '공격수', '스트라이커', '스트', '윙', '윙어',
+    '윙포워드', '레프트윙', '라이트윙', '센터포워드', '최전방', '원톱', '투톱'],
+};
+/** 두 단어 포지션의 앞말 (레프트 윙 / 라이트 백 / 센터 백 …) */
+export const POS_MODIFIERS = ['레프트', '라이트', '센터', '사이드', '중앙', '좌', '우', 'left', 'right', 'center', 'centre', 'side'];
+
+const normTok = (t) => String(t ?? '').trim().toLowerCase().replace(/[.\-_]/g, '');
+
+/** 토큰 1개 → { pos, gk } (아니면 null) */
+export function parsePositionToken(tok) {
+  const t = normTok(tok);
+  if (!t) return null;
+  for (const [pos, list] of Object.entries(POS_TOKENS)) {
+    if (list.some((x) => normTok(x) === t)) return { pos, gk: pos === 'GK' };
+  }
+  return null;
+}
+
+/**
+ * tokens[i] 부터 포지션을 읽는다 (두 단어 우선).
+ * @returns {{pos:string|null, gk:boolean, consumed:number}|null}
+ */
+export function matchPositionAt(tokens, i) {
+  const a = tokens[i];
+  const b = tokens[i + 1];
+  if (b) {
+    const joined = parsePositionToken(normTok(a) + normTok(b));   // "레프트"+"윙" → 레프트윙
+    if (joined) return { ...joined, consumed: 2 };
+  }
+  const one = parsePositionToken(a);
+  if (one) {
+    // "윙" 다음에 "백" 이 오면 윙백(수비)로 읽는다
+    if (b && normTok(a) === '윙' && normTok(b) === '백') return { pos: 'DF', gk: false, consumed: 2 };
+    return { ...one, consumed: 1 };
+  }
+  if (POS_MODIFIERS.some((m) => normTok(m) === normTok(a))) {
+    // 수식어인데 뒤에 포지션이 없으면 그냥 버린다 (이름으로 오인하지 않게)
+    return { pos: null, gk: false, consumed: 1 };
+  }
+  return null;
+}
+
+/** 이름 문자열에서 포지션 토큰만 떼어낸다 (기존 회원 정리 도구용) */
+export function splitNamePosition(rawName) {
+  const tokens = String(rawName ?? '').split(/[\s,/()·|]+/).filter(Boolean);
+  const nameParts = [];
+  let pos = null; let gk = false; const extras = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const hit = matchPositionAt(tokens, i);
+    if (hit) {
+      if (hit.pos) {
+        if (!pos) { pos = hit.pos; gk = hit.gk; }
+        else { extras.push(hit.pos); if (hit.gk) gk = true; }
+      }
+      i += hit.consumed - 1;
+      continue;
+    }
+    nameParts.push(tokens[i]);
+  }
+  const name = nameParts.join(' ').trim();
+  return { name: name || String(rawName ?? '').trim(), pos, gk, extras, changed: !!pos && !!name };
+}
+
 /** 성별 (미입력 허용) */
 export const GENDERS = ['남', '여'];
 export function parseGender(v) {
@@ -103,31 +177,59 @@ export function parseBirthYear(v, now = new Date()) {
  * 일괄 추가 한 줄 파싱: "홍길동", "홍길동 90", "홍길동,1990", "홍길동 90 여", "홍길동 여 90"
  * 출생년도·성별 토큰은 순서 무관, 없으면 null.
  */
-export function parseMemberLine(line) {
+/**
+ * 일괄 추가 한 줄 파싱.
+ *   "홍길동" / "홍길동 90" / "김철수,1988" / "이영희 92 여"
+ *   "교 진혜린 95 여 포워드" / "정지원 96 여 레프트 윙" / "정성현 85 남 센터백"
+ * 순서 무관. 줄 맨 앞의 팀 약자(팀 이름 첫 글자 또는 팀 이름 전체)는 team 으로 읽는다.
+ * @param {string} line
+ * @param {{teamNames?:Object}} opts  { A:'교역', B:'장년', ... } 형태면 약자 매칭에 쓴다
+ */
+export function parseMemberLine(line, opts = {}) {
   const raw = String(line ?? '').trim();
   if (!raw) return null;
-  let rest = raw;
-  let birthYear = null;
-  let gender = null;
+  const tokens = raw.split(/[\s,/()·|\t]+/).filter(Boolean);
 
-  // 뒤에서부터 최대 2개 토큰을 떼어 본다
-  for (let i = 0; i < 2; i += 1) {
-    const m = rest.match(/^(.*?)[\s,\t]+([^\s,\t]+)$/);
-    if (!m || !m[1].trim()) break;
-    const tok = m[2];
-    if (birthYear == null && /^\d{2}$|^\d{4}$/.test(tok) && parseBirthYear(tok)) {
-      birthYear = parseBirthYear(tok);
-      rest = m[1].trim();
-      continue;
-    }
-    if (gender == null && parseGender(tok)) {
-      gender = parseGender(tok);
-      rest = m[1].trim();
-      continue;
-    }
-    break;
+  const nameParts = [];
+  let birthYear = null; let gender = null; let pos = null; let gk = false; let team = null;
+  const extraPos = [];
+
+  // 줄 맨 앞 팀 약자 ("교" / "교역")
+  const names = opts.teamNames || null;
+  if (names && tokens.length > 1) {
+    const t0 = String(tokens[0]).trim();
+    const hit = TEAM_KEYS.find((k) => {
+      const nm = String(names[k] || '').trim();
+      if (!nm) return false;
+      return t0 === nm || (t0.length === 1 && nm[0] === t0);
+    });
+    if (hit) { team = hit; tokens.shift(); }
   }
-  return { name: rest.replace(/[\s,]+$/, '').trim(), birthYear, gender };
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i];
+    if (birthYear == null && /^(\d{2}|\d{4})$/.test(tok)) {
+      const y = parseBirthYear(tok);
+      if (y) { birthYear = y; continue; }
+    }
+    if (gender == null) {
+      const g = parseGender(tok);
+      if (g) { gender = g; continue; }
+    }
+    const ph = matchPositionAt(tokens, i);
+    if (ph) {
+      if (ph.pos) {
+        if (!pos) { pos = ph.pos; gk = ph.gk; }
+        else { extraPos.push(ph.pos); if (ph.gk) gk = true; }
+      }
+      i += ph.consumed - 1;
+      continue;
+    }
+    nameParts.push(tok);
+  }
+
+  const name = nameParts.join(' ').replace(/\s+/g, ' ').trim();
+  return { name, birthYear, gender, pos, gk, team, extraPos };
 }
 
 export function uid(prefix = 'id') {
@@ -279,12 +381,20 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       bulkAdd(names, defaults = {}) {
         const added = [];
         const seen = new Set(state.members.map((m) => m.name));
+        const teamNames = state.club?.teamNames || null;
         const expand = (raw) => {
-          const parsed = parseMemberLine(raw);
-          if (!parsed) return [];
-          // "홍길동,90" 처럼 뒤가 출생년도면 한 명, "김철수, 이영희" 처럼 아니면 이름 목록
-          if (parsed.birthYear || !parsed.name.includes(',')) return [parsed];
-          return parsed.name.split(',').map((x) => parseMemberLine(x)).filter((x) => x && x.name);
+          const line = String(raw ?? '').trim();
+          if (!line) return [];
+          // "김철수, 이영희" 처럼 콤마로 여러 명을 적은 줄과
+          // "홍길동,90" / "이영희,여,미드" 처럼 한 명의 정보를 콤마로 적은 줄을 구분한다.
+          if (line.includes(',')) {
+            const pieces = line.split(',').map((x) => x.trim()).filter(Boolean);
+            const parsedPieces = pieces.map((x) => parseMemberLine(x, { teamNames })).filter(Boolean);
+            const everyHasName = parsedPieces.length >= 2 && parsedPieces.every((x) => x.name);
+            if (everyHasName) return parsedPieces;      // 이름 목록
+          }
+          const parsed = parseMemberLine(line, { teamNames });
+          return parsed && parsed.name ? [parsed] : [];
         };
         for (const raw of names) {
           for (const parsed of expand(raw)) {
@@ -292,7 +402,10 @@ export function createStore(adapter = new LocalStorageAdapter()) {
             seen.add(parsed.name);
             const m = normalizeMember({ ...defaults, name: parsed.name,
               birthYear: parsed.birthYear ?? defaults.birthYear ?? null,
-              gender: parsed.gender ?? defaults.gender ?? null });
+              gender: parsed.gender ?? defaults.gender ?? null,
+              pos: parsed.pos ?? defaults.pos ?? 'MF',
+              gk: parsed.gk || defaults.gk || false,
+              team: parsed.team ?? defaults.team ?? null });
             state.members.push(m);
             added.push(m);
           }
