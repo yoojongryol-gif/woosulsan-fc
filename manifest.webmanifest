@@ -1,0 +1,23 @@
+{
+  "name": "웃을산 FC",
+  "short_name": "웃을산FC",
+  "description": "축구 모임 관리 — 회원·출석·팀 나누기·전술판",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "id": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f4ee",
+  "theme_color": "#1f7a4d",
+  "categories": ["sports", "productivity"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "출석 체크", "url": "./#attend" },
+    { "name": "팀 나누기", "url": "./#team" }
+  ]
+}
