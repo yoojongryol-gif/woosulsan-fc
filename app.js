@@ -5,7 +5,7 @@ import { parseRoster, matchNames } from './roster.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.1';
+export const APP_VERSION = 'v0.5.2';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -854,7 +854,7 @@ function renderCoachMode(root) {
     </div>
     <div class="coach-head">
       <div class="t">감독 평가 화면</div>
-      <div class="s">팀을 고르고 각 선수의 종합 실력을 바로 눌러 주세요. 저장은 자동입니다.</div>
+      <div class="s">감독에게 폰을 건네 직접 입력받거나, 감독 말을 들으며 채우는 화면입니다. 점을 누르면 바로 저장됩니다.</div>
     </div>
     <div class="seg-wide" id="coach-team">
       ${TEAM_KEYS.map((k) => `<button data-ct="${k}" aria-pressed="${k === key}">${esc(teamName(k))}</button>`).join('')}

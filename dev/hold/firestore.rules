@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 웃을산 FC — 권한 3등급 (dev/DATA_MODEL.md §9 표와 1:1)
+    //   운영자(owner)  : clubs/{clubId}.ownerUid          — 전부
+    //   책임자(coach)  : clubs/{clubId}.teams[K].coachUid — 자기 팀 선수 평가/포지션, 자기 팀 출석 대리, 전술
+    //   회원(member)   : members/{id}.memberUid           — 본인 프로필 일부 + 본인 출석
+    // 설계 메모
+    //   · 초대 토큰은 inviteIndex/{token} 문서 id 로만 접근(get). list 전면 금지 —
+    //     5959 보안감사(2026-08-05) 교훈: 컬렉션 열거로 코드를 수확하는 경로를 원천 봉합.
+    //   · 이름 가로채기 방지: 이미 memberUid 가 붙은 회원 문서에는 남의 pendingUid 를 걸 수 없다.
+    //   · get() 호출은 규칙당 과금되므로 클럽 문서를 작게 유지한다(teams 맵 4개 + 이름 정도).
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function clubData(clubId) { return get(/databases/$(database)/documents/clubs/$(clubId)).data; }
+    function isOwner(clubId) { return signedIn() && clubData(clubId).ownerUid == uid(); }
+    function coachTeamKey(clubId) {
+      return clubData(clubId).teams.A.coachUid == uid() ? 'A'
+           : clubData(clubId).teams.B.coachUid == uid() ? 'B'
+           : clubData(clubId).teams.C.coachUid == uid() ? 'C'
+           : clubData(clubId).teams.D.coachUid == uid() ? 'D' : '';
+    }
+    function isCoach(clubId) { return signedIn() && coachTeamKey(clubId) != ''; }
+    function isCoachOf(clubId, teamKey) { return signedIn() && teamKey != null && coachTeamKey(clubId) == teamKey; }
+    function memberData(clubId, memberId) {
+      return get(/databases/$(database)/documents/clubs/$(clubId)/members/$(memberId)).data;
+    }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function onlyFields(allowed) { return changed().hasOnly(allowed); }
+
+    // ── 초대 토큰 ────────────────────────────────────────────────
+    // 문서 id = 토큰(22자). 토큰을 아는 사람만 get 으로 열람. list 는 절대 금지.
+    match /inviteIndex/{token} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['clubId', 'role', 'team', 'createdAt', 'expiresAt', 'createdBy'])
+        && request.resource.data.createdBy == uid()
+        && (request.resource.data.role == 'coach' || request.resource.data.role == 'member')
+        && request.resource.data.expiresAt is int
+        && isOwner(request.resource.data.clubId);
+      allow update: if false;                       // 재사용·재지정 금지 (필요하면 새로 발급)
+      allow delete: if signedIn()
+        && (isOwner(resource.data.clubId)
+            // 책임자 초대는 수락하는 본인이 소모(1회용)
+            || (resource.data.role == 'coach' && isCoachOf(resource.data.clubId, resource.data.team)));
+    }
+
+    match /clubs/{clubId} {
+      // 클럽 정보는 로그인한 사람이면 읽을 수 있다(초대 미리보기에 클럽명 필요).
+      allow get: if signedIn();
+      allow list: if false;                         // 클럽 열거 금지
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.name is string;
+
+      allow update: if isOwner(clubId)
+        // 책임자 초대 수락: teams 만, 빈 자리에, 자기 uid 로
+        || (signedIn() && onlyFields(['teams'])
+            && (
+              (resource.data.teams.A.coachUid == null && request.resource.data.teams.A.coachUid == uid()
+                && request.resource.data.teams.B == resource.data.teams.B
+                && request.resource.data.teams.C == resource.data.teams.C
+                && request.resource.data.teams.D == resource.data.teams.D)
+              || (resource.data.teams.B.coachUid == null && request.resource.data.teams.B.coachUid == uid()
+                && request.resource.data.teams.A == resource.data.teams.A
+                && request.resource.data.teams.C == resource.data.teams.C
+                && request.resource.data.teams.D == resource.data.teams.D)
+              || (resource.data.teams.C.coachUid == null && request.resource.data.teams.C.coachUid == uid()
+                && request.resource.data.teams.A == resource.data.teams.A
+                && request.resource.data.teams.B == resource.data.teams.B
+                && request.resource.data.teams.D == resource.data.teams.D)
+              || (resource.data.teams.D.coachUid == null && request.resource.data.teams.D.coachUid == uid()
+                && request.resource.data.teams.A == resource.data.teams.A
+                && request.resource.data.teams.B == resource.data.teams.B
+                && request.resource.data.teams.C == resource.data.teams.C)
+            ));
+      allow delete: if isOwner(clubId);
+
+      // ── 회원 ────────────────────────────────────────────────
+      match /members/{memberId} {
+        allow get, list: if signedIn();              // 명단은 클럽 구성원에게 공개(초대 수락 시 본인 찾기)
+        allow create, delete: if isOwner(clubId);
+
+        allow update: if isOwner(clubId)
+          // 책임자: 자기 팀 선수의 평가 필드만. 소속(team)·이름·활동여부는 못 건드린다.
+          || (isCoachOf(clubId, resource.data.team)
+              && request.resource.data.team == resource.data.team
+              && onlyFields(['skill', 'abil', 'pos',
+                             'skillUpdatedAt', 'skillUpdatedBy', 'abilUpdatedAt', 'abilUpdatedBy']))
+          // 회원 본인: 프로필 일부 (실력·소속·활동여부 제외)
+          || (signedIn() && resource.data.memberUid == uid()
+              && onlyFields(['birthYear', 'gender', 'pos', 'selfAbil']))
+          // 초대 수락 1단계: 아직 주인이 없는 이름에 "본인 uid" 로만 연결 요청
+          || (signedIn() && onlyFields(['pendingUid', 'pendingAt'])
+              && request.resource.data.pendingUid == uid()
+              && (!('memberUid' in resource.data) || resource.data.memberUid == null))
+          // 승인/거절: 운영자 또는 해당 팀 책임자 (위 isOwner 로 이미 커버, 책임자만 추가)
+          || (isCoachOf(clubId, resource.data.team)
+              && onlyFields(['memberUid', 'pendingUid', 'pendingAt'])
+              && (request.resource.data.memberUid == resource.data.pendingUid
+                  || request.resource.data.memberUid == resource.data.memberUid));
+      }
+
+      // ── 경기 ────────────────────────────────────────────────
+      match /matches/{matchId} {
+        allow get, list: if signedIn();
+        allow create, update, delete: if isOwner(clubId);
+
+        match /attendance/{memberId} {
+          allow get, list: if signedIn();
+          allow write: if isOwner(clubId)
+            || isCoachOf(clubId, memberData(clubId, memberId).team)            // 자기 팀 대리 체크
+            || (signedIn() && memberData(clubId, memberId).memberUid == uid()); // 본인 출석
+        }
+      }
+
+      // ── 전술 ────────────────────────────────────────────────
+      match /tactics/{tacticId} {
+        allow get, list: if signedIn();
+        allow write: if isOwner(clubId) || isCoach(clubId);
+      }
+
+      // ── 상대 클럽(대외 경기, v0.6에서 사용 예정) ─────────────
+      match /opponents/{opponentId} {
+        allow get, list: if signedIn();
+        allow write: if isOwner(clubId) || isCoach(clubId);
+      }
+    }
+  }
+}
