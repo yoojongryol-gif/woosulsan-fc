@@ -7,6 +7,9 @@
  * 이 셋은 서로 다른 저장소를 쓴다. "명단이 사라졌다" 의 가장 흔한 원인이라 앱이 먼저 알려 준다.
  */
 
+/** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
+export const MODULE_VERSION = 'v0.5.5';
+
 export const META_KEY = 'woosulsan-fc:meta';   // { lastBackupAt, bannerHiddenUntil }
 
 const IN_APP = [

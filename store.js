@@ -4,6 +4,9 @@
  * 모든 메서드는 async — 원격 저장소로 바꿔도 호출부가 안 바뀌게.
  */
 
+/** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
+export const MODULE_VERSION = 'v0.5.5';
+
 export const SCHEMA_VERSION = 2;
 
 /** 고정 소속 팀 키 (회원은 이 중 하나에 소속되거나 미배정) */

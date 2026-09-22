@@ -2,6 +2,9 @@
  * 카톡 투표 결과·댓글·메모 등 흔한 형식을 이름 토큰으로 정리하고 회원 명단과 매칭한다.
  */
 
+/** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
+export const MODULE_VERSION = 'v0.5.5';
+
 const SECTION_IN = /(참석|참가|참여|가능|오케이|ok|출석|^o$|^⭕|^✅)/i;
 const SECTION_OUT = /(불참|못\s*감|못감|안\s*됨|불가|취소|^x$|^❌)/i;
 const SECTION_MAYBE = /(미정|보류|반반|애매|늦음)/i;

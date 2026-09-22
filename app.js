@@ -1,13 +1,15 @@
 /* 웃을산 FC — 앱 본체 */
 import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
-  ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition } from './store.js';
+  ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition,
+  DEFAULT_TEAM_ALIASES, MODULE_VERSION as STORE_VERSION } from './store.js';
 import { parseRoster, matchNames } from './roster.js';
-import { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel } from './env.js';
+import { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
+  MODULE_VERSION as ENV_VERSION } from './env.js';
 import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } from './drafts.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.4';
+export const APP_VERSION = 'v0.5.5';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -787,6 +789,15 @@ function emptyMatches(msg) {
 
 /* ---------- 팀 ---------- */
 function teamName(k) { return k === 'none' ? '미배정' : store.club.teamName(k); }
+/** 팀 약자 (옛 store 가 섞여 들어와도 화면이 죽지 않게 기본값으로 대체) */
+function aliasOf(k) {
+  try { return store.club.teamAlias?.(k) || DEFAULT_TEAM_ALIASES[k] || ''; }
+  catch (e) { return DEFAULT_TEAM_ALIASES[k] || ''; }
+}
+function aliasMap() {
+  try { return store.club.teamAliases?.() || { ...DEFAULT_TEAM_ALIASES }; }
+  catch (e) { return { ...DEFAULT_TEAM_ALIASES }; }
+}
 /** 팀 평균 능력치 한 줄 (입력된 사람이 없으면 표시 안 함) */
 function abilLine(a, inline = false) {
   if (!a || !a.count) return '';
@@ -997,7 +1008,7 @@ function teamNameModal() {
     ${TEAM_KEYS.map((k, i) => `<div class="field"><label>${i + 1}번째 팀</label>
       <div class="row" style="gap:6px">
         <input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12" placeholder="팀 이름" style="flex:2">
-        <input type="text" data-ta="${k}" value="${esc(store.club.teamAlias(k))}" maxlength="2" placeholder="약자" style="flex:0 0 74px;text-align:center">
+        <input type="text" data-ta="${k}" value="${esc(aliasOf(k))}" maxlength="2" placeholder="약자" style="flex:0 0 74px;text-align:center">
       </div>
       <div class="togglerow" style="margin-top:6px">
         <label>혼성팀 (여성 회원 소속)</label>
@@ -1031,7 +1042,7 @@ function teamNameModal() {
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
       $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
       $$('[data-coach]', m).forEach((sel) => store.club.setCoach(sel.dataset.coach, sel.value || null));
-      $$('[data-ta]', m).forEach((inp) => store.club.setTeamAlias(inp.dataset.ta, inp.value));
+      $$('[data-ta]', m).forEach((inp) => store.club.setTeamAlias?.(inp.dataset.ta, inp.value));
       closeModal();
       toast('팀 이름을 저장했습니다');
       render();
@@ -1097,7 +1108,7 @@ function coachRow(m, key) {
 function messyNameMembers() {
   const opts = {
     teamNames: Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)])),
-    teamAliases: store.club.teamAliases(),
+    teamAliases: aliasMap(),
   };
   return store.members.all().map((m) => {
     const sp = splitNamePosition(m.name, opts);
@@ -1519,7 +1530,7 @@ function bulkModal() {
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
       한 줄에 한 명씩 붙여넣으세요. <b>출생년도·성별·포지션</b>은 순서 상관없이 알아서 읽습니다.<br>
       예: <code>교 진혜린 95 여 포워드</code>, <code>정성현 85 남 센터백</code>, <code>김알곡 GK</code><br>
-      줄 맨 앞 <b>팀 약자</b>(${TEAM_KEYS.map((k) => esc(store.club.teamAlias(k))).join('·')})를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
+      줄 맨 앞 <b>팀 약자</b>(${TEAM_KEYS.map((k) => esc(aliasOf(k))).join('·')})를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
     </div>
     <textarea id="f-bulk" rows="7" placeholder="교 진혜린 95 여 포워드&#10;정성현 85 남 센터백&#10;김철수"></textarea>
     <div id="bulk-preview" class="bulkpv"></div>
@@ -1537,7 +1548,7 @@ function bulkModal() {
       const box = $('#bulk-preview', m);
       if (!box) return;
       const teamNames = Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)]));
-      const teamAliases = store.club.teamAliases();
+      const teamAliases = aliasMap();
       const lines = $('#f-bulk', m).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       if (!lines.length) { box.innerHTML = ''; return; }
       const exist = new Set(store.members.all().map((x) => x.name));
@@ -2294,8 +2305,32 @@ function registerSW() {
   }).catch((e) => console.warn('[sw] 등록 실패', e));
 }
 
+/* ---------- 모듈 버전 검사 (v0.5.5) ----------
+ * 2026-09-22 라이브 사고: 새 app.js 와 캐시에 남은 옛 store.js 가 섞여
+ * store.club.teamAliases is not a function 으로 회원 탭이 비었다.
+ * 파일이 여러 개인 ES 모듈 앱이라 "일부만 새 버전" 이 실제로 생긴다 → 부팅 때 직접 확인한다.
+ */
+function checkModuleVersions() {
+  const mods = { 'store.js': STORE_VERSION, 'env.js': ENV_VERSION };
+  const bad = Object.entries(mods).filter(([, v]) => v !== APP_VERSION);
+  if (!bad.length) return true;
+  console.warn('[app] 모듈 버전 불일치', bad, '기대값', APP_VERSION);
+  const once = 'fc-mod-reload';
+  if (sessionStorage.getItem(once) === APP_VERSION) {
+    toast('앱 파일이 섞여 있습니다. 새로고침해 주세요', 'err');
+    return false;
+  }
+  sessionStorage.setItem(once, APP_VERSION);
+  caches.keys()
+    .then((ks) => Promise.all(ks.filter((k) => k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k))))
+    .catch(() => {})
+    .then(() => location.reload());
+  return false;
+}
+
 /* ================= 시작 ================= */
 async function main() {
+  if (!checkModuleVersions()) return;   // 캐시가 섞였으면 복구 후 다시 시작한다
   $('#brand-logo').innerHTML = LOGO;
   $$('.tabbar button').forEach((b) => { $('.ico', b).innerHTML = ICON[b.dataset.icon]; });
   await store.init();

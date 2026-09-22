@@ -7,6 +7,9 @@
  * 초안은 앱 데이터(woosulsan-fc:v1)와 분리된 키에 저장하므로 내보내기 JSON 에 섞이지 않는다.
  */
 
+/** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
+export const MODULE_VERSION = 'v0.5.5';
+
 export const DRAFT_PREFIX = 'woosulsan-fc:draft:';
 export const DRAFT_TTL_MS = 3 * 24 * 60 * 60 * 1000;   // 3일 지난 초안은 버린다
 
