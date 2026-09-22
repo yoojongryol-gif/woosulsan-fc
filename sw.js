@@ -1,8 +1,8 @@
-/* 웃을산 FC 서비스워커
+/* 축구&joy 서비스워커 (캐시 접두 woosulsan-fc- 는 그대로 — URL/저장소 이름이라 바꾸지 않는다)
  * 원칙: network-first + 버전 스탬프 캐시명.
  * (cache-first + 고정 캐시명 = "옛 화면 고착" 사고 전례 → 금지)
  */
-const VERSION = 'v0.5.6';
+const VERSION = 'v0.5.7';
 const CACHE = `woosulsan-fc-${VERSION}`;
 const PRECACHE = [
   './', './index.html', './styles.css', './app.js', './store.js', './balance.js',

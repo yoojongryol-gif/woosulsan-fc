@@ -1,4 +1,4 @@
-/* 웃을산 FC — 앱 본체 */
+/* 축구&joy — 앱 본체 (저장소·URL·localStorage 키는 woosulsan-fc 그대로) */
 import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
   ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition, analyzeMemberName,
   effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION as STORE_VERSION } from './store.js';
@@ -9,7 +9,9 @@ import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel 
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.6';
+export const APP_VERSION = 'v0.5.7';
+/** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
+export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -482,6 +484,8 @@ function envCard() {
         : env.mode === 'inapp'
           ? `${esc(env.appLabel)} 안의 브라우저는 <b>별도 저장소</b>를 씁니다. 여기서 넣은 명단은 사파리·크롬·홈 화면 앱에서 보이지 않습니다.`
           : '브라우저 탭입니다. 홈 화면에 추가한 앱과는 저장이 분리되니 한 곳만 정해 쓰세요.'}</div>
+      <div class="ec-note">홈 화면 아이콘 이름은 추가할 때 정해져서, 이미 추가해 둔 아이콘은 전 이름 그대로입니다.
+        바꾸려면 아이콘을 지우고 <b>다시 추가</b>하세요(명단은 그대로 남습니다).</div>
       <button class="btn block" id="btn-move-data" style="margin-top:10px">다른 곳으로 옮기기</button>
     </div>`;
 }
@@ -514,8 +518,8 @@ function moveDataSheet() {
       if (act === 'share') {
         const file = new File([json], `woosulsan-fc_${todayStr()}.json`, { type: 'application/json' });
         try {
-          if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: '웃을산 FC 백업' }); markBackup(); toast('공유했습니다'); }
-          else if (navigator.share) { await navigator.share({ title: '웃을산 FC 백업', text: json.slice(0, 100000) }); markBackup(); }
+          if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: `${APP_NAME} 백업` }); markBackup(); toast('공유했습니다'); }
+          else if (navigator.share) { await navigator.share({ title: `${APP_NAME} 백업`, text: json.slice(0, 100000) }); markBackup(); }
           else { exportJSON(); }
         } catch (err) { if (err?.name !== 'AbortError') exportJSON(); }
       }
@@ -530,7 +534,7 @@ function pasteImportSheet() {
     <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
       다른 곳에서 "클립보드 복사"한 내용을 그대로 붙여넣으세요. 파일이 있으면 아래 "파일 고르기"를 쓰면 됩니다.
     </div>
-    <textarea id="f-paste" rows="7" placeholder='{"app":"웃을산 FC", ...}'></textarea>
+    <textarea id="f-paste" rows="7" placeholder='{"app":"축구&amp;joy", ...}'></textarea>
     <div class="row" style="margin-top:8px">
       <button class="btn grow" data-act="file">파일 고르기</button>
       <button class="btn grow primary" data-act="go">가져오기</button>
@@ -1011,6 +1015,8 @@ function adoptSuggestion(idx) {
 function teamNameModal() {
   openModal(`
     <h3>팀 설정</h3>
+    <div class="field"><label>클럽 이름 <span class="labelhint">공유 이미지 위에 찍히는 우리 모임 이름 (앱 이름과는 별개)</span></label>
+      <input type="text" id="f-clubname" value="${esc(store.club.name())}" maxlength="20" placeholder="웃을산 FC"></div>
     <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
       고정 소속 팀 4개입니다. <b>약자</b>는 일괄 추가에서 줄 맨 앞에 쓰는 1~2글자예요 — 예: <code>체 진혜린 95 여 포워드</code>.
     </div>
@@ -1048,6 +1054,8 @@ function teamNameModal() {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'cancel') return closeModal();
+      const cn = $('#f-clubname', m);
+      if (cn) store.club.setName(cn.value);
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
       $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
       $$('[data-coach]', m).forEach((sel) => store.club.setCoach(sel.dataset.coach, sel.value || null));
@@ -1334,7 +1342,7 @@ function renderMembers() {
       <button class="btn danger block" id="btn-reset" style="margin-top:12px">전체 데이터 초기화</button>
     </div>
     ${aiSettingsCard()}
-    <div class="footer-note">웃을산 FC · ${APP_VERSION} · <span id="sw-state">로컬 저장</span></div>`;
+    <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION} · <span id="sw-state">로컬 저장</span></div>`;
 
   root.innerHTML = html;
 }
@@ -1350,7 +1358,7 @@ function switchTab(tab, { push = true } = {}) {
   else if (tab === 'members') renderMembers();
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
   $$('.tabbar button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  $('#topbar-title').textContent = { home: '웃을산 FC', attend: '출석 체크', team: '팀 나누기', tactics: '전술판', members: '회원 관리' }[tab];
+  $('#topbar-title').textContent = { home: APP_NAME, attend: '출석 체크', team: '팀 나누기', tactics: '전술판', members: '회원 관리' }[tab];
   if (push && location.hash !== `#${tab}`) location.hash = `#${tab}`;
   window.scrollTo({ top: 0 });
   document.dispatchEvent(new CustomEvent('app:tab', { detail: tab }));
@@ -1891,7 +1899,7 @@ async function exportTeamsPNG() {
   roundRect(x, 40, 40, W - 80, 130, 26); x.fill();
   x.fillStyle = '#fff';
   x.font = '900 44px -apple-system, Malgun Gothic, sans-serif';
-  x.fillText('웃을산 FC', 76, 100);
+  x.fillText(store.club.name(), 76, 100);   // 머리글 = 클럽 이름 (꼬리말이 앱 이름)
   x.font = '700 28px -apple-system, Malgun Gothic, sans-serif';
   x.fillStyle = 'rgba(255,255,255,.88)';
   x.fillText(`${fmtDate(g.date)} ${g.time || ''}${g.place ? ' · ' + g.place : ''}`, 76, 142);
@@ -1929,10 +1937,10 @@ async function exportTeamsPNG() {
   });
   x.fillStyle = '#9a9183';
   x.font = '600 22px -apple-system, Malgun Gothic, sans-serif';
-  x.fillText(`웃을산 FC 앱 ${APP_VERSION}`, 44, H - 26);
+  x.fillText(`${APP_NAME} 앱 ${APP_VERSION}`, 44, H - 26);
 
   const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-  const file = new File([blob], `웃을산FC_${g.date}_팀.png`, { type: 'image/png' });
+  const file = new File([blob], `축구joy_${g.date}_팀.png`, { type: 'image/png' });
   await shareOrDownload(file, blob);
 }
 
@@ -2384,7 +2392,7 @@ async function main() {
   // 전술 모듈(2단계)
   import('./tactics.js')
     .then((mod) => mod.initTactics({ store, ui, switchTab, toast, esc, openModal, closeModal, confirmDialog,
-      shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS, APP_VERSION, groupLabel, groupColor, currentPlan,
+      shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS, APP_VERSION, APP_NAME, groupLabel, groupColor, currentPlan,
       labelOf, AI, aiRun, aiSkeleton, aiCostLine, aiKeyNotice }))
     .catch((e) => {
       console.warn('[tactics] 준비 중', e);
@@ -2400,5 +2408,5 @@ window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adopt
   parseMemberLine, splitNamePosition, analyzeMemberName, nameCandidates, aliasLeftovers, nameFixSheet,
   effectiveSkill, isUnrated,
   rosterModal, parseRoster, matchNames, womenLock,
-  APP_VERSION, TEAM_KEYS, AI, aiTeamCoach, applyAIPlan, aiNoticeModal, aiAskModal, aiState };
+  APP_VERSION, APP_NAME, TEAM_KEYS, exportTeamsPNG, AI, aiTeamCoach, applyAIPlan, aiNoticeModal, aiAskModal, aiState };
 main();

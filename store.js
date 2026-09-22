@@ -1,11 +1,11 @@
-/* 웃을산 FC — 저장 계층 어댑터
+/* 축구&joy — 저장 계층 어댑터
  * 지금: localStorage 어댑터 1개.
  * 나중: 같은 인터페이스로 FirestoreAdapter 를 끼우면 앱 코드는 그대로.
  * 모든 메서드는 async — 원격 저장소로 바꿔도 호출부가 안 바뀌게.
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.6';
+export const MODULE_VERSION = 'v0.5.7';
 
 export const SCHEMA_VERSION = 2;
 
@@ -685,6 +685,13 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     /* 클럽 설정 (팀 이름) */
     club: {
       get() { return state.club; },
+      /** 클럽 이름 (앱 이름 APP_NAME 과는 다른 값) */
+      name() { return state.club.name || '웃을산 FC'; },
+      setName(v) {
+        const clean = String(v ?? '').trim().slice(0, 20);
+        state.club.name = clean || '웃을산 FC';
+        touch();
+      },
       teamName(key) { return state.club.teamNames?.[key] || DEFAULT_TEAM_NAMES[key] || key; },
       /** 팀 약자 (일괄 추가에서 줄 맨 앞에 쓰는 1~2글자) */
       teamAlias(key) { return state.club.teamAliases?.[key] || DEFAULT_TEAM_ALIASES[key] || key; },
@@ -743,7 +750,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
 
     /* 백업 / 이관 */
     exportJSON() {
-      return JSON.stringify({ app: '웃을산 FC', exportedAt: new Date().toISOString(), data: state }, null, 2);
+      // app 필드는 표기용일 뿐이다 — importJSON 은 이 값을 보지 않으므로 옛 "웃을산 FC" 백업도 그대로 들어온다
+      return JSON.stringify({ app: '축구&joy', exportedAt: new Date().toISOString(), data: state }, null, 2);
     },
     async importJSON(text, { merge = false } = {}) {
       let parsed;

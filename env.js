@@ -1,4 +1,4 @@
-/* 웃을산 FC — 실행 환경 감지 (데이터가 "어디에" 저장되는지 알려주기 위한 모듈)
+/* 축구&joy — 실행 환경 감지 (데이터가 "어디에" 저장되는지 알려주기 위한 모듈)
  *
  * 배경: localStorage 는 "브라우저 + 출처" 단위로 나뉜다. 그래서 같은 주소라도
  *   · 카톡 인앱 브라우저에서 연 앱
@@ -8,7 +8,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.6';
+export const MODULE_VERSION = 'v0.5.7';
 
 export const META_KEY = 'woosulsan-fc:meta';   // { lastBackupAt, bannerHiddenUntil }
 

@@ -1,4 +1,4 @@
-/* 웃을산 FC — AI 모듈 (Anthropic Messages API 브라우저 직접 호출)
+/* 축구&joy — AI 모듈 (Anthropic Messages API 브라우저 직접 호출)
  *
  * 근거 (claude-api 스킬 / SDK 소스 확인, 2026-09-22):
  *  - 엔드포인트: POST https://api.anthropic.com/v1/messages
@@ -206,6 +206,7 @@ export async function askJSON(opts) {
 }
 
 /* ---------------- 앱 데이터 → 컨텍스트 요약 ---------------- */
+const APP_SELF = "당신은 축구 모임 관리 앱 '축구&joy' 안에서 동작합니다. ";
 const GUARD = '제공된 데이터에 없는 사실(이름·기록·결과·부상 등)은 절대 지어내지 마세요. 모르면 모른다고 쓰세요.';
 
 /** 간단 체크 6항목 중 입력된 것만 (스피드/지구력/기본기/슈팅/수비/피지컬, 각 1~5) */
@@ -287,7 +288,7 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
     })),
   };
   return {
-    system: `당신은 한국 동호회 축구 모임의 팀 편성 코치입니다. 실력(1~5)·포지션·GK 유무·인원을 고려해 오늘 경기의 팀을 추천합니다. ${GUARD}
+    system: `${APP_SELF}당신은 한국 동호회 축구 모임의 팀 편성 코치입니다. 실력(1~5)·포지션·GK 유무·인원을 고려해 오늘 경기의 팀을 추천합니다. ${GUARD}
 반드시 아래 JSON 하나만 출력하세요. 설명 문장은 JSON 안에만 넣습니다.
 {"teams":[{"name":"팀 이름","members":["이름",...]}],"reasons":["이유 3줄"],"cautions":["주의점"]}
 - members 에는 제공된 참석자 이름만, 한 사람은 한 팀에만 넣습니다. 전원을 배정하세요.
@@ -310,7 +311,7 @@ export function tacticsPrompt({ players, teamLabel, formations, note }) {
     사용자메모: note || '',
   };
   return {
-    system: `당신은 한국 동호회 축구 팀의 전술 코치입니다. ${GUARD}
+    system: `${APP_SELF}당신은 한국 동호회 축구 팀의 전술 코치입니다. ${GUARD}
 반드시 아래 JSON 하나만 출력하세요.
 {"formation":"선택가능_포메이션 중 하나","pins":[{"name":"선수 이름","x":0.5,"y":0.9,"role":"GK/CB/CM/ST 등"}],"instructions":["핵심 지시 3~5개"]}
 - 좌표는 0~1 정규화. x=0 왼쪽, x=1 오른쪽. y=0 상대 골대(공격 방향), y=1 우리 골대.
@@ -334,7 +335,7 @@ export function noticePrompt({ store, matchId, mode = 'notice', tone = '짧게' 
     : null;
   const toneGuide = { '짧게': '3~5줄로 짧고 담백하게', '유쾌하게': '친근하고 유쾌하게, 이모지 2~3개까지', '정중하게': '정중한 존댓말로 단정하게' }[tone] || '짧고 담백하게';
   return {
-    system: `당신은 축구 동호회 총무입니다. 단톡방에 그대로 붙여넣을 한국어 ${mode === 'review' ? '경기 총평' : '경기 공지문'}을 씁니다.
+    system: `${APP_SELF}당신은 축구 동호회 총무입니다. 단톡방에 그대로 붙여넣을 한국어 ${mode === 'review' ? '경기 총평' : '경기 공지문'}을 씁니다.
 ${toneGuide} 쓰세요. 제목 줄 + 본문 형식, 마크다운 표는 쓰지 마세요. ${GUARD}
 ${mode === 'review' ? '결과 데이터가 없으면 점수·득점자를 지어내지 말고 참석·팀 구성 중심으로 씁니다.' : '준비물·시간·장소는 제공된 값만 씁니다.'}
 JSON 없이 본문만 출력하세요.`,
@@ -351,7 +352,7 @@ export function askPrompt({ store, question, history = [] }) {
     참석: store.matches.attendees(g.id).map((m) => m.name),
   }));
   return {
-    system: `당신은 축구 동호회 운영을 돕는 비서입니다. 아래 모임 데이터만 근거로 한국어로 간결하게(5줄 이내) 답합니다. ${GUARD}
+    system: `${APP_SELF}당신은 축구 동호회 운영을 돕는 비서입니다. 아래 모임 데이터만 근거로 한국어로 간결하게(5줄 이내) 답합니다. ${GUARD}
 계산이 필요하면 직접 세어서 답하고, 이름을 나열할 때는 쉼표로 구분합니다.
 
 [모임 데이터]

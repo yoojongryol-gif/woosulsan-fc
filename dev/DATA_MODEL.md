@@ -1,4 +1,10 @@
-# 웃을산 FC 데이터 모델 (schema 2, v0.5.6)
+# 축구&joy 데이터 모델 (schema 2, v0.5.7)
+
+> **앱 이름 vs 클럽 이름** (v0.5.7, 2026-09-22 사장님)
+> - `APP_NAME = '축구&joy'` (app.js) — 앱 자체의 이름. 제목표시줄·헤더·manifest·설정 하단·공유 이미지 푸터·파일명·AI 프롬프트·`exportJSON().app`.
+> - `club.name` (기본값 "웃을산 FC") — **모임 이름**. 팀 설정에서 편집하고, 공유 이미지·전술판 이미지의 머리글에 찍힌다(`store.club.name()` / `setName()`).
+> - **바뀜 수 없는 것**: localStorage 키(`woosulsan-fc:*`), 저장소·URL, sw 캐시 접두 `woosulsan-fc-`. 이름이 아니라 **주소**라서 바꾸면 기존 데이터가 끊긴다.
+> - `importJSON` 은 `app` 필드를 보지 않는다 → 옛 "웃을산 FC" 백업 파일도 그대로 들어온다.
 
 저장은 `store.js` 어댑터 한 곳을 통해서만 이루어진다. 지금은 `LocalStorageAdapter`(키 `woosulsan-fc:v1`),
 나중에 같은 인터페이스(`load()` / `save(state)` / `clear()`)를 가진 `FirestoreAdapter` 로 갈아끼우면 화면 코드는 그대로다.

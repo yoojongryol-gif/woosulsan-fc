@@ -1,4 +1,4 @@
-/* 웃을산 FC — 입력 초안 보존 (v0.5.3)
+/* 축구&joy — 입력 초안 보존 (v0.5.3)
  *
  * 사고 배경(2026-09-22): 새 버전 서비스워커가 준비되면 앱이 곧바로 location.reload() 를 했다.
  * 일괄 추가 시트에 명단을 입력하던 중에 새로고침이 걸리면 저장 전 입력이 통째로 사라진다.
@@ -8,7 +8,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.6';
+export const MODULE_VERSION = 'v0.5.7';
 
 export const DRAFT_PREFIX = 'woosulsan-fc:draft:';
 export const DRAFT_TTL_MS = 3 * 24 * 60 * 60 * 1000;   // 3일 지난 초안은 버린다

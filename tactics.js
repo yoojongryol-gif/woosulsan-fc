@@ -1,4 +1,4 @@
-/* 웃을산 FC — 전술판: 포메이션 프리셋 · 핀 드래그 · 그림판 · 저장 · PNG */
+/* 축구&joy — 전술판: 포메이션 프리셋 · 핀 드래그 · 그림판 · 저장 · PNG */
 
 export const PRESETS = [
   { name: '4-3-3', size: 11, rows: [4, 3, 3] },
@@ -52,7 +52,7 @@ export function layout(preset, players) {
 
 export function initTactics(ctx) {
   const { store, ui, toast, esc, confirmDialog, shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS,
-    APP_VERSION, groupLabel, groupColor, currentPlan, labelOf, AI, aiRun, aiCostLine } = ctx;
+    APP_VERSION, APP_NAME, groupLabel, groupColor, currentPlan, labelOf, AI, aiRun, aiCostLine } = ctx;
   const root = document.getElementById('view-tactics');
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -174,7 +174,7 @@ export function initTactics(ctx) {
           <button class="btn sm danger" data-del="${s.id}">삭제</button>
         </div>`).join('')
         : `<div class="empty" style="padding:22px"><div class="big">저장된 전술이 없습니다</div><div>배치를 만들고 "전술 저장"을 누르세요.</div></div>`}
-      <div class="footer-note">웃을산 FC · ${APP_VERSION}</div>`;
+      <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION}</div>`;
 
     if (players.length >= 2 && !t.pins.length) resetLayout(false);
     bindPitch();
@@ -373,7 +373,7 @@ export function initTactics(ctx) {
     x.fillText(t.title || `${t.formation} 전술`, 24, 44);
     x.fillStyle = '#6b6255';
     x.font = '700 20px -apple-system, Malgun Gothic, sans-serif';
-    x.fillText(`웃을산 FC · ${fmtDate(g.date)} · ${t.teamLabel || '전체 참석자'} · ${t.formation}`, 24, 76);
+    x.fillText(`${store.club.name()} · ${fmtDate(g.date)} · ${t.teamLabel || '전체 참석자'} · ${t.formation}`, 24, 76);
 
     const oy = HEAD;
     // 잔디
@@ -428,10 +428,10 @@ export function initTactics(ctx) {
       x.textAlign = 'left';
     });
     x.fillStyle = '#9a9183'; x.font = '600 16px -apple-system, Malgun Gothic, sans-serif';
-    x.fillText(`웃을산 FC 앱 ${APP_VERSION}`, 24, c.height - 14);
+    x.fillText(`${APP_NAME} 앱 ${APP_VERSION}`, 24, c.height - 14);
 
     const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-    await shareOrDownload(new File([blob], `웃을산FC_${g.date}_전술.png`, { type: 'image/png' }), blob);
+    await shareOrDownload(new File([blob], `축구joy_${g.date}_전술.png`, { type: 'image/png' }), blob);
   }
 
   /* ---------- AI 전술 추천 ---------- */
