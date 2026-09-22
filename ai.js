@@ -210,6 +210,20 @@ const APP_SELF = "당신은 축구 모임 관리 앱 '축구&joy' 안에서 동�
 const GUARD = '제공된 데이터에 없는 사실(이름·기록·결과·부상 등)은 절대 지어내지 마세요. 모르면 모른다고 쓰세요.';
 
 /** 간단 체크 6항목 중 입력된 것만 (스피드/지구력/기본기/슈팅/수비/피지컬, 각 1~5) */
+/** 기준표 요약 (남/여 5점·3점·1점만) + 측정 종목 */
+function rubricBrief(store) {
+  const out = {};
+  for (const g of ['male', 'female']) {
+    const label = g === 'male' ? '남성기준' : '여성기준';
+    const rows = store.club.rubric(g);
+    out[label] = Object.fromEntries(Object.keys(rows).map((k) => [k, {
+      '5점': store.club.rubricText(k, 5, g), '3점': store.club.rubricText(k, 3, g), '1점': store.club.rubricText(k, 1, g),
+    }]));
+  }
+  out['설명'] = '스피드는 20m 왕복 달리기, 지구력은 1.5km 달리기 기록으로 자동 환산된 점수입니다.';
+  return out;
+}
+
 function abilBrief(m) {
   const map = { speed: '스피드', stamina: '지구력', basic: '기본기', shoot: '슈팅', defense: '수비', physical: '피지컬' };
   const out = {};
@@ -277,8 +291,11 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
   const data = {
     경기: { 날짜: g.date, 장소: g.place || '미정' },
     오늘팀수: groundCountSafe(groupCount),
+    팀당_기본_인원: store.club.squadSize(),
     혼성팀: mixed,
     여성_혼성팀_고정: lockWomen,
+    혼성_환산_계수: store.club.mixedFactor(),
+    평가_기준표: rubricBrief(store),
     소속팀별참석자: teams,
     앱이_계산한_합치기후보: (candidates || []).map((c) => ({
       묶음: c.groups.map((grp) => grp.map((k) => (k === 'none' ? '미배정' : store.club.teamName(k))).join('+')),
@@ -288,7 +305,9 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
     })),
   };
   return {
-    system: `${APP_SELF}당신은 한국 동호회 축구 모임의 팀 편성 코치입니다. 실력(1~5)·포지션·GK 유무·인원을 고려해 오늘 경기의 팀을 추천합니다. ${GUARD}
+    system: `${APP_SELF}당신은 한국 동호회 축구 모임의 팀 편성 코치입니다.
+평가 기준은 남녀가 다릅니다 — 여성 회원의 점수는 "여성 회원끼리 비교 + 혼성 경기" 기준으로 매겨진 값입니다.
+전력을 합칠 때는 아래 혼성 환산 계수가 이미 반영된 점수를 쓰세요. 실력(1~5)·포지션·GK 유무·인원을 고려해 오늘 경기의 팀을 추천합니다. ${GUARD}
 반드시 아래 JSON 하나만 출력하세요. 설명 문장은 JSON 안에만 넣습니다.
 {"teams":[{"name":"팀 이름","members":["이름",...]}],"reasons":["이유 3줄"],"cautions":["주의점"]}
 - members 에는 제공된 참석자 이름만, 한 사람은 한 팀에만 넣습니다. 전원을 배정하세요.

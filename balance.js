@@ -237,10 +237,61 @@ export function evaluateGroups(groups, byTeam) {
 }
 
 /** 참석 인원 → 권장 팀 묶음 수 (고정 4팀 기준) */
-export function suggestGroupCount(n, availableTeams = 4) {
-  const want = n >= 24 ? 4 : n >= 15 ? 3 : 2;
-  return Math.max(2, Math.min(availableTeams, want));
+export function suggestGroupCount(n, availableTeams = 4, base = 11) {
+  return recommendGroups(n, { availableTeams, base }).count;
 }
+
+/** n 명을 k 팀으로 고르게 나눴을 때의 인원 (오름차순) — 예: 16,3 → [5,5,6] */
+export function evenSplit(n, k) {
+  const teams = Math.max(1, Math.round(k) || 1);
+  const size = Math.max(0, Math.round(n) || 0);
+  const base = Math.floor(size / teams);
+  const rem = size % teams;
+  return Array.from({ length: teams }, (_, i) => base + (i >= teams - rem ? 1 : 0));
+}
+
+/**
+ * 참석 인원으로 오늘 팀 수를 권한다 (v0.6.0, 2026-09-22 사장님)
+ *  - "경기 만들기에 팀 수를 미리 정할 수 없으니 참석 인원에 따라"
+ *  - "축구 경기니 11대11이 기본 인원으로" → 팀당 기본 인원(base)을 기준으로 센다
+ * 규칙: 권장 팀 수 = floor(참석 / base) 를 2~4 로 가둔다.
+ *   - 2×base 미만이면 2팀 + 몇 명 부족한지 알려 준다 (11명 기준 22명 미만)
+ *   - 2×base ~ 3×base-1 이면 "2팀 + 교체 N명" 이 기본, "3팀 로테이션" 을 대안으로 제시
+ *   - 3×base 이상 3팀, 4×base 이상 4팀
+ * @returns {{count, sizes, bench, short, base, reason, alts}}
+ */
+export function recommendGroups(n, { base = 11, availableTeams = 4, teamSizes = [] } = {}) {
+  const size = Math.max(0, Math.round(n) || 0);
+  const b = Math.max(2, Math.round(base) || 11);
+  const cap = Math.max(2, Math.min(4, Math.round(availableTeams) || 4));
+  let count = Math.max(2, Math.min(4, Math.floor(size / b)));
+  count = Math.min(count, cap);
+
+  const short = size < b * 2 ? b * 2 - size : 0;
+  const bench = Math.max(0, size - count * b);
+  const sizes = evenSplit(size, count);
+  const head = `${b}명 기준 · 참석 ${size}명`;
+
+  let reason;
+  if (short > 0) reason = `${head} → ${count}팀 권장 (팀당 ${sizes.join('·')}명, ${short}명 부족)`;
+  else if (bench > 0) reason = `${head} → ${count}팀 + 교체 ${bench}명`;
+  else reason = `${head} → ${count}팀 권장 (${sizes.join('·')})`;
+
+  // 대안: 2팀+교체가 많으면 한 팀 더 만들어 돌리는 편이 나을 수 있다
+  const alts = [];
+  if (bench > 0 && count < 4 && count + 1 <= cap && size >= (count + 1) * Math.ceil(b * 0.6)) {
+    alts.push({ count: count + 1, label: `${count + 1}팀 로테이션`, sizes: evenSplit(size, count + 1) });
+  }
+  return { count, sizes, bench, short, base: b, reason, alts };
+}
+
+/** 기준 인원을 넘는 팀을 선발/교체로 나눈다 (앞에서부터 선발) */
+export function splitStarters(ids, base = 11) {
+  const b = Math.max(1, Math.round(base) || 11);
+  const list = Array.isArray(ids) ? ids : [];
+  return { starters: list.slice(0, b), bench: list.slice(b) };
+}
+
 
 /** 한 팀이 경기하기에 부족한지 (5명 미만이거나 GK 없음) */
 export function teamShortage(stat) {

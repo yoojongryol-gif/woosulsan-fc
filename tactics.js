@@ -1,5 +1,6 @@
 /* 축구&joy — 전술판: 포메이션 프리셋 · 핀 드래그 · 그림판 · 저장 · PNG */
 
+/** 기본은 11인 4-3-3 (v0.6.0 사장님: "축구 경기니 11대11이 기본 인원으로") */
 export const PRESETS = [
   { name: '4-3-3', size: 11, rows: [4, 3, 3] },
   { name: '4-4-2', size: 11, rows: [4, 4, 2] },
@@ -10,6 +11,14 @@ export const PRESETS = [
   { name: '1-2-1', size: 5, rows: [1, 2, 1] },
 ];
 const COLORS = ['#ffd83d', '#ff5a4d', '#ffffff'];
+
+/** 인원에 맞는 프리셋 — 딱 맞는 게 없으면 인원 이하 중 가장 큰 것 */
+export function presetForSize(n) {
+  const size = Math.max(1, Math.round(n) || 11);
+  return PRESETS.find((p) => p.size === size)
+    || [...PRESETS].sort((a, b) => b.size - a.size).find((p) => p.size <= size)
+    || PRESETS[PRESETS.length - 1];
+}
 
 /** 인원수에 맞는 프리셋만 (딱 맞는 게 있으면 그것들, 없으면 인원 이하 중 가장 큰 쪽) */
 export function presetsFor(n) {

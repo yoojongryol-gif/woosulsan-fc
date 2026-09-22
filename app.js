@@ -16,14 +16,16 @@ import * as AI from './ai.js';
 
 const { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
   ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition, analyzeMemberName,
-  effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION: STORE_VERSION } = STORE_NS;
+  effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION: STORE_VERSION,
+  RUBRIC_GENDERS, rubricKeyFor, weightedSkill, MIXED_FACTOR_MIN, MIXED_FACTOR_MAX,
+  TESTS, testForAbil, parseTestInput, formatTestValue, SQUAD_SIZES } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
-const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } = BALANCE_NS;
+const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage, recommendGroups } = BALANCE_NS;
 
-export const APP_VERSION = 'v0.5.9';
+export const APP_VERSION = 'v0.6.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -70,6 +72,168 @@ function nextWeekday(target = 4) { // 기본 목요일
   d.setDate(d.getDate() + diff);
   return d.toISOString().slice(0, 10);
 }
+/* ---------- 평가 기준표 (v0.6.0) ----------
+ * 사장님 2026-09-22: "남자와 여자 기준이 달라야 되는데 기준을 잡아놓고 평가를 해야 될 듯"
+ * 회원의 성별에 맞는 기준표를 자동으로 붙여 준다. 성별 미입력은 남성 기준 + 노랑 표시.
+ */
+function rubricKeyOf(member) { return rubricKeyFor(member?.gender); }
+function rubricBadge(member) {
+  const key = rubricKeyOf(member);
+  const g = RUBRIC_GENDERS.find((x) => x.key === key);
+  const unknown = !member?.gender;
+  return `<span class="rbadge${key === 'female' ? ' f' : ''}${unknown ? ' warn' : ''}">기준: ${esc(g.badge)}${unknown ? ' · 성별 미입력' : ''}</span>`;
+}
+/** 점 버튼 hover/길게누르기용 한 줄 */
+function rubricLine(itemKey, level, member) {
+  const label = ABILITIES.find((a) => a.key === itemKey)?.label || itemKey;
+  const txt = store.club.rubricText(itemKey, level, rubricKeyOf(member));
+  return `${label} ${level} — ${txt}`;
+}
+/**
+ * 6항목 한 줄 (폼·감독 화면 공용)
+ * 스피드·지구력은 측정 기록(20m 왕복 / 1.5km)이 있으면 점 대신 기록 칸을 보여 주고
+ * 점수는 성별 경계값으로 자동 환산한다. 자물쇠를 풀면 손으로도 매길 수 있다.
+ * @param rec  { sec, manual } 저장된 기록 (없으면 null)
+ */
+function abilRow(a, value, member, attr, rec) {
+  const v = Number(value) || 0;
+  const t = testForAbil(a.key);
+  const locked = !!(t && rec && rec.sec != null && rec.manual !== true);
+  const head = `<button type="button" class="nm nmbtn" data-rubric="${a.key}" aria-label="${esc(a.label)} 기준 보기">${esc(a.label)}${t ? `<i>${esc(t.label)}</i>` : a.hint ? `<i>${esc(a.hint)}</i>` : ''}<span class="q">?</span></button>`;
+  const dots = `<span class="dots">
+      ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="dot" data-v="${n}"
+        aria-pressed="${v >= n}" aria-label="${esc(a.label)} ${n}점"
+        title="${esc(rubricLine(a.key, n, member))}"></button>`).join('')}
+      <button type="button" class="clr" data-v="0" aria-label="${esc(a.label)} 지우기">×</button>
+    </span>`;
+  if (!t) return `<div class="abil-row${v ? '' : ' empty'}" ${attr}>${head}${dots}</div>`;
+
+  const val = rec && rec.sec != null ? (t.unit === 'mmss' ? formatTestValue(t.key, rec.sec) : String(rec.sec)) : '';
+  const testBox = `<span class="tst">
+      <input type="text" class="tin" data-test="${t.key}" value="${esc(val)}"
+        inputmode="${t.unit === 'mmss' ? 'text' : 'decimal'}" placeholder="${esc(t.placeholder)}"
+        aria-label="${esc(t.label)} 기록">${t.suffix ? `<span class="unit">${esc(t.suffix)}</span>` : ''}
+      <span class="tauto${v ? '' : ' none'}" data-tauto="${t.key}">${v ? `${v}점` : '–'}</span>
+      ${rec && rec.sec != null ? `<button type="button" class="tlock" data-tlock="${t.key}" aria-pressed="${locked}"
+        title="${locked ? '기록으로 자동 계산 중 — 누르면 손으로 고칠 수 있습니다' : '손으로 매기는 중 — 누르면 기록 기준으로 되돌립니다'}">${locked ? '🔒' : '🔓'}</button>` : ''}
+    </span>`;
+  return `<div class="abil-row test${v ? '' : ' empty'}${locked ? ' locked' : ''}" ${attr}>
+    ${head}${testBox}
+    ${locked ? '' : dots}
+  </div>`;
+}
+/** 한 항목의 5단계 기준을 보여 주는 시트 (현재 점수 강조, 눌러서 바로 평가) */
+function rubricSheet(itemKey, member, current, onPick) {
+  const a = ABILITIES.find((x) => x.key === itemKey);
+  const key = rubricKeyOf(member);
+  const rows = store.club.rubric(key)[itemKey];
+  const g = RUBRIC_GENDERS.find((x) => x.key === key);
+  openModal(`
+    <h3>${esc(a.label)} 기준</h3>
+    <div class="rsheet-head">${rubricBadge(member)}${member?.name ? `<span class="dim">${esc(member.name)}</span>` : ''}</div>
+    ${rows.map((t, i) => `<button type="button" class="rlevel${current === i + 1 ? ' on' : ''}" data-lv="${i + 1}">
+      <span class="lv">${i + 1}</span><span class="tx">${esc(t)}</span>
+    </button>`).join('')}
+    <div class="hint" style="margin-top:8px">기준 문구는 설정 → 평가 기준표에서 고칠 수 있습니다.</div>
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="close"]')) return closeModal();
+      const b = e.target.closest('[data-lv]');
+      if (!b) return;
+      const lv = Number(b.dataset.lv);
+      // afterModalClose 가 이 시트를 닫는다 — 여기서 closeModal() 을 또 부르면 뒤에 있던 폼까지 닫힌다
+      if (onPick) afterModalClose(() => onPick(lv));
+      else closeModal();
+    });
+  });
+}
+/** 점을 길게 누르면 그 단계 설명을 한 줄로 띄운다 (폰에는 hover 가 없다) */
+function bindLongPressRubric(root, memberOf) {
+  let timer = null;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  root.addEventListener('touchstart', (e) => {
+    const dot = e.target.closest('.dot[data-v]');
+    const row = dot?.closest('[data-abil], [data-cabil]');
+    if (!dot || !row) return;
+    const itemKey = row.dataset.abil || String(row.dataset.cabil || '').split(':')[1];
+    timer = setTimeout(() => { toast(rubricLine(itemKey, Number(dot.dataset.v), memberOf(row))); timer = null; }, 500);
+  }, { passive: true });
+  ['touchend', 'touchmove', 'touchcancel'].forEach((ev) => root.addEventListener(ev, clear, { passive: true }));
+}
+
+/** 설정 → 평가 기준표 (v0.6.0) — 남/여 탭, 6항목 × 5단계 문구 + 측정 경계값 */
+function rubricModal(genderKey = 'male') {
+  const g = genderKey === 'female' ? 'female' : 'male';
+  const rows = store.club.rubric(g);
+  const th = store.club.testThresholds();
+  openModal(`
+    <h3>평가 기준표</h3>
+    <div class="seg-wide" id="rb-gender">
+      ${RUBRIC_GENDERS.map((x) => `<button type="button" data-rg="${x.key}" aria-pressed="${x.key === g}">${esc(x.label)} 기준</button>`).join('')}
+    </div>
+    <div class="hint" style="margin:8px 0 12px">${g === 'female'
+      ? '여성 회원끼리 비교하되, 혼성 경기에서 어느 정도인지를 함께 적습니다.'
+      : '이 동호회 남성 회원들 사이의 비교입니다.'}
+      기본값은 동호회 성인 기준 <b>초안</b>이라, 첫 측정 뒤 조정하시길 권합니다.</div>
+    ${TESTS.map((t) => `<div class="rbsec">
+      <div class="rbhd">${esc(t.label)}<span>${esc(ABILITIES.find((a) => a.key === t.abil).label)} 자동 환산${t.hint ? ` · ${esc(t.hint)}` : ''}</span></div>
+      <div class="rbth">
+        ${[5, 4, 3, 2].map((lv, i) => `<label class="thcell"><span class="lv">${lv}점</span>
+          <input type="text" data-th="${t.key}:${i}" value="${esc(formatTestValue(t.key, th[t.key][g][i]).replace('초', ''))}"
+            inputmode="${t.unit === 'mmss' ? 'text' : 'decimal'}" aria-label="${esc(t.label)} ${lv}점 경계">
+          <span class="u">${esc(t.unit === 'mmss' ? '이하' : '초 이하')}</span></label>`).join('')}
+        <div class="thlast">1점 = ${esc(store.club.testBound(t.key, 1, g === 'female' ? '여' : '남'))}</div>
+      </div>
+    </div>`).join('')}
+    ${ABILITIES.map((a) => `<div class="rbsec">
+      <div class="rbhd">${esc(a.label)}${testForAbil(a.key) ? '<span>기록으로 자동 환산되는 항목</span>' : ''}</div>
+      ${rows[a.key].map((txt, i) => `<label class="rbrow"><span class="lv">${i + 1}</span>
+        <input type="text" data-rb="${a.key}:${i + 1}" value="${esc(txt)}" maxlength="40" aria-label="${esc(a.label)} ${i + 1}점 기준"></label>`).join('')}
+    </div>`).join('')}
+    <div class="foot">
+      <button class="btn ghost" data-act="reset">기본값으로 되돌리기</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const gb = e.target.closest('#rb-gender [data-rg]');
+      if (gb) {
+        // 탭을 옮기기 전에 지금 입력한 내용을 먼저 저장한다
+        saveRubricInputs(m, g);
+        return afterModalClose(() => rubricModal(gb.dataset.rg));
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'reset') {
+        closeModal();
+        if (await confirmDialog({ title: '기준표를 기본값으로 되돌릴까요?', body: '남·여 문구와 측정 경계값이 모두 처음 상태로 돌아갑니다. 회원 점수는 기록 기준으로 다시 계산됩니다.', ok: '되돌리기', danger: true })) {
+          store.club.resetRubric();
+          store.club.resetTestThresholds();
+          toast('기본값으로 되돌렸습니다');
+          render();
+        }
+        return;
+      }
+      if (act === 'save') {
+        saveRubricInputs(m, g);
+        closeModal();
+        toast('기준표를 저장했습니다');
+        render();
+      }
+    });
+  });
+}
+function saveRubricInputs(m, g) {
+  $$('[data-rb]', m).forEach((inp) => {
+    const [key, lv] = inp.dataset.rb.split(':');
+    store.club.setRubricText(g, key, Number(lv), inp.value);
+  });
+  $$('[data-th]', m).forEach((inp) => {
+    const [tk, i] = inp.dataset.th.split(':');
+    const sec = parseTestInput(tk, inp.value);
+    if (sec != null) store.club.setTestThreshold(tk, g, Number(i), sec);
+  });
+}
+
 /** 종합 실력 표시: 자동 평균이면 숫자, 없으면 "미평가" */
 function skillLabel(m) {
   return isUnrated(m) ? '미평가' : String(effectiveSkill(m));
@@ -120,14 +284,25 @@ function openModal(html, onMount) {
   if (firstInput && !('ontouchstart' in window)) setTimeout(() => firstInput.focus(), 60);
   return back;
 }
+/* 우리가 부른 history.back() 으로 생길 popstate 개수.
+ * 2026-09-22 실측 버그: closeModal() 이 history.back() 을 부르고 곧바로 다음 모달을 열면,
+ * 뒤늦게 도착한 popstate 가 "뒤로가기" 로 오해돼 방금 연 모달을 닫아 버렸다.
+ * → 회원 삭제·경기 삭제·기준표 되돌리기의 확인 창이 아예 뜨지 않았다(눌러도 아무 일 없음).
+ * 우리가 부른 back 은 여기서 세어 두고 popstate 에서 한 번 소비한다. */
+let pendingPop = 0;
 function closeModal({ fromPop = false } = {}) {
   const back = modalStack.pop();
   if (!back) return;
   back.remove();
   if (!modalStack.length) document.body.style.overflow = '';
-  if (!fromPop && history.state?.modal) history.back();
+  if (!fromPop && history.state?.modal) {
+    pendingPop += 1;
+    setTimeout(() => { pendingPop = Math.max(0, pendingPop - 1); }, 1000);   // back 이 안 오는 경우 대비
+    history.back();
+  }
 }
 window.addEventListener('popstate', () => {
+  if (pendingPop > 0) { pendingPop -= 1; return; }   // 우리가 이미 닫은 몫 — 아무 것도 더 닫지 않는다
   if (modalStack.length) closeModal({ fromPop: true });
   else applyHash();
 });
@@ -142,7 +317,7 @@ function afterModalClose(fn) {
   const onPop = () => run();
   window.addEventListener('popstate', onPop);
   closeModal();
-  setTimeout(run, 250);   // popstate 가 오지 않는 경우 대비
+  setTimeout(run, 120);   // popstate 가 오지 않아도 진행
 }
 
 function confirmDialog({ title, body = '', ok = '확인', danger = false }) {
@@ -272,7 +447,7 @@ async function aiTeamCoach() {
   if (att.none.length) byTeam.none = att.none;
   const plan = currentPlan(g);
   const groupCount = ui.groupCount || plan?.teams.length || suggestGroupCount(total, Object.keys(byTeam).length);
-  const candidates = suggestMerges(byTeam, Math.min(groupCount, Object.keys(byTeam).length)).slice(0, 4);
+  const candidates = suggestMerges(wtMap(byTeam), Math.min(groupCount, Object.keys(byTeam).length)).slice(0, 4);
 
   const r = await aiRun('#ai-coach-box', 'AI 팀 코치가 보는 중', AI.teamCoachPrompt({ store, matchId: g.id, candidates, groupCount }),
     (res) => {
@@ -713,7 +888,9 @@ function matchRow(g) {
     <div class="d"><div class="m">${Number(m)}월</div><div class="n">${Number(d)}</div></div>
     <button class="info" data-open-match="${g.id}" style="background:none;border:none;padding:0">
       <div class="p">${g.place ? esc(g.place) : '장소 미정'}</div>
-      <div class="s">${esc(g.time || '')} · 참석 ${att}명 · ${g.teamCount}팀</div>
+      <div class="s">${esc(g.time || '')} · 참석 ${att}명${g.teamCount
+        ? ` · ${g.teamCount}팀`
+        : att >= 2 ? ` · ${store.club.squadSize()}명 기준 ${recommendGroups(att, { base: store.club.squadSize() }).count}팀` : ''}</div>
     </button>
     <span class="st ${esc(g.status)}">${esc(g.status)}</span>
     <button class="btn sm ghost ai" data-ai-review="${g.id}" title="AI 글쓰기">AI</button>
@@ -820,6 +997,21 @@ function aliasOf(k) {
   catch (e) { return DEFAULT_TEAM_ALIASES[k] || ''; }
 }
 function myRoleLabel() { return 'owner'; }
+/**
+ * 팀 전력 계산용으로 여성 회원 점수에 혼성 환산 계수를 적용한 복사본 (v0.6.0)
+ * 계수 1.0 이면 원본을 그대로 돌려주므로 기존 동작과 완전히 같다.
+ */
+function wt(list) {
+  const f = store.club.mixedFactor();
+  if (f === 1 || !Array.isArray(list)) return list;
+  return list.map((m) => (m?.gender === '여' ? { ...m, skill: weightedSkill(m, f) } : m));
+}
+function wtMap(byTeam) {
+  const f = store.club.mixedFactor();
+  if (f === 1) return byTeam;
+  return Object.fromEntries(Object.entries(byTeam).map(([k, v]) => [k, wt(v)]));
+}
+
 function teamNameMap() { return Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)])); }
 function aliasMap() {
   try { return store.club.teamAliases?.() || { ...DEFAULT_TEAM_ALIASES }; }
@@ -889,7 +1081,7 @@ function renderTeam() {
   html += '<div class="team-grid">';
   html += TEAM_KEYS.map((k, i) => {
     const list = att[k];
-    const s = groupStat(list);
+    const s = groupStat(wt(list));
     const short = list.length ? teamShortage(s) : ['참석 없음'];
     return `<div class="tstat" style="--c:${TEAM_COLORS[i]}">
       <div class="hd"><span class="dot"></span><b>${esc(teamName(k))}</b><span class="n">${list.length}명</span></div>
@@ -926,16 +1118,31 @@ function renderTeam() {
   if (att.none.length) byTeam.none = att.none;
   const availableTeams = Object.keys(byTeam).length;
   const plan = currentPlan(g);
-  const recommended = suggestGroupCount(total, availableTeams);
+  // v0.6.0: 팀 수는 참석 인원과 팀당 기본 인원으로 권한다
+  const base = store.club.squadSize();
+  const rec = recommendGroups(total, {
+    base,
+    availableTeams: Math.max(availableTeams, 2),
+    teamSizes: TEAM_KEYS.map((k) => att[k].length),
+  });
+  const recommended = rec.count;
   const wanted = ui.groupCount || (plan ? plan.teams.length : recommended);
-  const options = [2, 3, 4].filter((n) => n <= Math.max(2, availableTeams));
+  const options = [2, 3, 4];
+
+  // 출석이 바뀐 뒤 아직 다시 나누지 않았으면 알려 준다
+  const planStamp = plan ? plan.teams.reduce((n, x) => n + x.length, 0) : null;
+  const attChanged = plan && planStamp !== total;
 
   html += `<div class="section-title">오늘 팀 수 <span class="count">권장 ${recommended}팀</span></div>
+    ${attChanged ? `<div class="fixbanner" style="margin-bottom:8px">
+      <div><b>참석 인원이 바뀌었어요</b><div class="s">지금 ${total}명인데 나눠 둔 팀은 ${planStamp}명 기준입니다.</div></div>
+      <button class="btn sm primary" id="btn-reco-again">다시 제안</button></div>` : ''}
     <div class="seg-wide" id="group-count">
       ${options.map((n) => `<button data-gc="${n}" aria-pressed="${wanted === n}">${n}팀</button>`).join('')}
-    </div>`;
+    </div>
+    <div class="recoline">${esc(rec.reason)}${rec.alts.length ? ` · 대안: <button class="linkbtn" data-gc-alt="${rec.alts[0].count}">${esc(rec.alts[0].label)}</button>` : ''}</div>`;
 
-  const suggestions = availableTeams >= 2 ? suggestMerges(byTeam, Math.min(wanted, availableTeams)).slice(0, 3) : [];
+  const suggestions = availableTeams >= 2 ? suggestMerges(wtMap(byTeam), Math.min(wanted, availableTeams)).slice(0, 3) : [];
   ui._suggestions = suggestions;
   if (suggestions.length) {
     html += `<div class="section-title">합치기 제안 <span class="count">${suggestions.length}개</span></div>`;
@@ -977,7 +1184,8 @@ function renderTeam() {
   }
 
   const teams = plan.teams.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
-  const st = teams.map(groupStat);
+  const st = teams.map((list) => groupStat(wt(list)));
+  const squad = store.club.squadSize();
   const totals = st.map((x) => x.total);
   const sp = Math.max(...totals) - Math.min(...totals);
   html += `<div class="section-title">오늘의 팀 <span class="right">전력 차 ${sp}</span></div>`;
@@ -989,9 +1197,11 @@ function renderTeam() {
         <span class="r">${t.length}명 · 전력 ${st[i].total} · GK ${st[i].gk}${st[i].female ? ` · 여 ${st[i].female}` : ''}</span>
       </div>
       <div class="bd">
-        ${t.map((p, j) => `<button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}" data-swap="${i}:${j}">
+        ${t.map((p, j) => `${j === squad && t.length > squad ? `<div class="benchsep">교체 ${t.length - squad}명</div>` : ''}
+          <button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}${j >= squad ? ' bench' : ''}" data-swap="${i}:${j}">
           ${p.gk ? '<span class="gkb">GK</span>' : ''}${store.club.coachTeamOf(p.id) ? '<span class="cb">🎽</span>' : ''}
           <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
+          ${t.length > squad ? `<span class="mv" data-bench="${i}:${j}" role="button" aria-label="${j >= squad ? '선발로' : '교체로'}">${j >= squad ? '↑' : '↓'}</span>` : ''}
         </button>`).join('')}
       </div>
       <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].ageAvg != null ? ` · 평균 ${st[i].ageAvg}세` : ''}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}${abilLine(st[i].abil, true)}</div>
@@ -1006,9 +1216,25 @@ function renderTeam() {
     </div>
     ${ui.teamSel
       ? '<div class="swap-hint">바꿀 상대 선수를 탭하세요</div>'
-      : '<div class="footer-note">선수 카드를 탭 → 다른 선수 탭 = 자리 교체</div>'}`;
+      : `<div class="footer-note">선수 카드를 탭 → 다른 선수 탭 = 자리 교체${teams.some((t) => t.length > squad) ? ' · ↓↑ = 선발/교체 이동' : ''}</div>`}`;
 
   root.innerHTML = html;
+}
+
+/** 선발 ↔ 교체 이동 (v0.6.0) — 배열 순서가 곧 선발 순서다 */
+function moveBench(ti, pi) {
+  const g = store.matches.byId(ui.teamMatchId);
+  const plan = currentPlan(g);
+  if (!plan?.teams?.[ti]) return;
+  const squad = store.club.squadSize();
+  const teams = plan.teams.map((x) => [...x]);
+  const arr = teams[ti];
+  if (pi < 0 || pi >= arr.length) return;
+  const [id] = arr.splice(pi, 1);
+  if (pi >= squad) arr.splice(Math.min(squad - 1, arr.length), 0, id);   // 교체 → 선발
+  else arr.push(id);                                                     // 선발 → 교체
+  ui.teamSel = null;
+  applyPlan({ ...plan, teams });
 }
 
 /** 제안 채택 → 오늘의 팀 구성 */
@@ -1055,6 +1281,17 @@ function teamNameModal() {
           })()}
         </select>
       </div></div>`).join('')}
+    <div class="field"><label>팀당 기본 인원 <span class="labelhint">축구는 11대11 · 풋살·미니게임이면 줄여서</span></label>
+      <div class="seg-wide" id="f-squad">
+        ${SQUAD_SIZES.map((n) => `<button type="button" data-sq="${n}" aria-pressed="${store.club.squadSize() === n}">${n}명</button>`).join('')}
+      </div>
+      <div class="hint">참석 인원을 이 숫자로 나눠 오늘 팀 수를 권합니다.</div></div>
+    <div class="field"><label>혼성 환산 계수 <span class="labelhint">여성 기준 점수를 팀 전력에 어떻게 반영할지</span></label>
+      <select id="f-mixf">
+        ${[10, 9, 8, 7, 6, 5].map((x) => { const v = x / 10; return `<option value="${v}" ${store.club.mixedFactor() === v ? 'selected' : ''}>${v.toFixed(1)}${v === 1 ? ' (끄기 · 지금과 동일)' : ''}</option>`; }).join('')}
+      </select>
+      <div class="hint">여성 회원의 점수는 여성 기준으로 매겨집니다. 이 값은 <b>여성 기준 4점을 남성 기준으로 몇 점으로 볼지</b>를 정합니다
+        (0.8이면 4점 → 3.2점). 팀 전력합·합치기 제안·완전 새로 섞기에만 쓰이고, 회원 화면의 점수는 그대로입니다.</div></div>
     ${store.club.coachMismatches().length ? `<div class="card flat" style="padding:10px 12px">
       ${store.club.coachMismatches().map((x) => `<div style="font-size:12.5px"><span class="chip warn">확인</span>
         ${esc(teamName(x.key))} 감독 ${esc(x.member?.name || '(삭제된 회원)')} —
@@ -1065,11 +1302,17 @@ function teamNameModal() {
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
     m.addEventListener('click', (e) => {
+      const sqb = e.target.closest('#f-squad [data-sq]');
+      if (sqb) { $$('#f-squad [data-sq]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === sqb))); return; }
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'cancel') return closeModal();
       const cn = $('#f-clubname', m);
       if (cn) store.club.setName(cn.value);
+      const sq = $('#f-squad [aria-pressed="true"]', m);
+      if (sq) store.club.setSquadSize(Number(sq.dataset.sq));
+      const mf = $('#f-mixf', m);
+      if (mf) store.club.setMixedFactor(Number(mf.value));
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
       $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
       $$('[data-coach]', m).forEach((sel) => store.club.setCoach(sel.dataset.coach, sel.value || null));
@@ -1098,7 +1341,9 @@ function renderCoachMode(root) {
     <div class="coach-head">
       <div class="t">감독 평가 화면</div>
       <div class="s">감독에게 폰을 건네 직접 입력받거나, 감독 말을 들으며 채우는 화면입니다.
-        6항목을 누르면 바로 저장되고, <b>종합 실력은 평균으로 자동</b> 계산됩니다.</div>
+        6항목을 누르면 바로 저장되고, <b>종합 실력은 평균으로 자동</b> 계산됩니다.
+        <b>기준은 회원 성별에 맞춰</b> 자동으로 바뀝니다 — 항목 이름을 누르면 5단계 기준이 보입니다.
+        스피드·지구력은 측정 기록을 넣으면 점수가 자동으로 매겨집니다.</div>
     </div>
     <div class="seg-wide" id="coach-team">
       ${TEAM_KEYS.map((k) => `<button data-ct="${k}" aria-pressed="${k === key}">${esc(teamName(k))}</button>`).join('')}
@@ -1111,26 +1356,27 @@ function renderCoachMode(root) {
 
 function coachRow(m, key) {
   // v0.5.6: 종합 실력은 6항목 평균 자동 → 6항목을 기본으로 펼쳐 두고, 종합은 옆에 표시만 한다
+  // v0.6.0: 성별 기준표 배지 + 스피드·지구력은 측정 기록 칸
   return `<div class="crow open" data-crow="${m.id}">
     <div class="line">
       <div class="who">
         <b>${esc(m.name)}</b>${store.club.coachTeamOf(m.id) === key ? '<span class="chip coach">🎽</span>' : ''}
         <div class="meta">${m.birthYear ? `${ageOf(m.birthYear)}세 · ` : ''}${esc(m.pos)}${m.gk ? ' · GK' : ''}${m.abilUpdatedAt ? ` · ${esc(fmtWhen(m.abilUpdatedAt))} ${esc(whoLabel(m.abilUpdatedBy))}` : ''}</div>
+        <div class="meta">${rubricBadge(m)}</div>
       </div>
       <div class="autoskill mini" data-auto="${m.id}">
         <b>${esc(skillLabel(m))}</b><span>종합</span>
       </div>
     </div>
     <div class="detail">
-      ${ABILITIES.map((a) => `<div class="abil-row" data-cabil="${m.id}:${a.key}">
-        <span class="nm">${a.label}</span>
-        <span class="dots">
-          ${[1, 2, 3, 4, 5].map((n) => `<button class="dot" data-v="${n}" aria-pressed="${(m.abil?.[a.key] || 0) >= n}"></button>`).join('')}
-          <button class="clr" data-v="0">×</button>
-        </span>
-      </div>`).join('')}
+      ${ABILITIES.map((a) => abilRow(a, m.abil?.[a.key], m, `data-cabil="${m.id}:${a.key}"`, testRecOf(m, a.key))).join('')}
     </div>
   </div>`;
+}
+/** 회원의 그 항목 측정 기록 (없으면 null) */
+function testRecOf(member, abilKey) {
+  const t = testForAbil(abilKey);
+  return t ? (member?.tests?.[t.key] || null) : null;
 }
 
 /* ---------- 이름 정리 도구 (v0.5.6) ----------
@@ -1349,6 +1595,7 @@ function renderMembers() {
       <button class="btn block" id="btn-paste-import" style="margin-bottom:8px">붙여넣어 가져오기</button>
       <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름 정리 (팀 글자·포지션 분리)</button>
       <button class="btn block" id="btn-team-names-2" style="margin-bottom:8px">팀 이름 바꾸기</button>
+      <button class="btn block" id="btn-rubric" style="margin-bottom:8px">평가 기준표 (남/여)</button>
       <input type="file" id="file-import" accept="application/json,.json" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
         데이터는 이 기기(브라우저)에만 저장됩니다. 기기를 바꾸거나 백업하려면 JSON으로 내보내 두세요.
@@ -1383,18 +1630,14 @@ function applyHash() {
 }
 
 function matchModal(existing) {
-  const g = existing || { date: nextWeekday(4), time: '20:00', place: '', teamCount: 2, status: '예정' };
+  // v0.6.0: 팀 수는 여기서 정하지 않는다 (참석 인원을 보고 팀 탭에서 정함)
+  const g = existing || { date: nextWeekday(4), time: '20:00', place: '', teamCount: null, status: '예정' };
   openModal(`
     <h3>${existing ? '경기 수정' : '경기 만들기'}</h3>
     <div class="field"><label>날짜</label><input type="date" id="f-date" value="${esc(g.date)}"></div>
     <div class="field"><label>시간</label><input type="time" id="f-time" value="${esc(g.time)}"></div>
     <div class="field"><label>장소</label><input type="text" id="f-place" placeholder="예: 시민운동장 A구장" value="${esc(g.place)}"></div>
-    <div class="field"><label>팀 수</label>
-      <div class="seg-wide" id="f-tc">
-        <button type="button" data-tc="2" aria-pressed="${g.teamCount === 2}">2팀</button>
-        <button type="button" data-tc="3" aria-pressed="${g.teamCount === 3}">3팀</button>
-      </div>
-    </div>
+    <div class="hint" style="margin:-2px 0 10px">팀 수는 미리 정하지 않습니다. 출석을 체크한 뒤 <b>팀 탭</b>에서 참석 인원에 맞춰 정해요.</div>
     ${existing ? `<div class="field"><label>상태</label>
       <div class="seg-wide" id="f-st">
         ${['예정', '확정', '종료'].map((s) => `<button type="button" data-st="${s}" aria-pressed="${g.status === s}">${s}</button>`).join('')}
@@ -1404,11 +1647,9 @@ function matchModal(existing) {
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
-    let tc = g.teamCount; let st = g.status;
+    let st = g.status;
     const placeDraft = existing ? null : bindDraft(m, 'match-place', '#f-place');
     m.addEventListener('click', async (e) => {
-      const tcb = e.target.closest('#f-tc [data-tc]');
-      if (tcb) { tc = Number(tcb.dataset.tc); $$('#f-tc [data-tc]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === tcb))); return; }
       const stb = e.target.closest('#f-st [data-st]');
       if (stb) { st = stb.dataset.st; $$('#f-st [data-st]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === stb))); return; }
       const act = e.target.closest('[data-act]')?.dataset.act;
@@ -1427,7 +1668,7 @@ function matchModal(existing) {
         date: $('#f-date', m).value || todayStr(),
         time: $('#f-time', m).value || '20:00',
         place: $('#f-place', m).value.trim(),
-        teamCount: tc, status: st,
+        status: st,   // teamCount 는 팀 탭에서 확정될 때 저장된다
       };
       if (existing) { store.matches.update(existing.id, data); toast('경기를 수정했습니다'); }
       else {
@@ -1476,17 +1717,10 @@ function memberModal(existing) {
     </div>
     <div class="abil-sec" id="f-abil-sec">
       <button type="button" class="abil-head" id="f-abil-toggle" aria-expanded="true">
-        <b>간단 체크</b><span class="labelhint">평가: 팀 감독</span><span class="dim" id="f-abil-sum">${abilAvg(m0.abil) ? `평균 ${abilAvg(m0.abil)}` : '미입력'}</span><span class="caret">▾</span>
+        <b>간단 체크</b><span class="labelhint">${esc(rubricKeyOf(m0) === 'female' ? '여성 기준' : '남성 기준')}</span><span class="dim" id="f-abil-sum">${abilAvg(m0.abil) ? `평균 ${abilAvg(m0.abil)}` : '미입력'}</span><span class="caret">▾</span>
       </button>
       <div class="abil-body" id="f-abil-body">
-        ${ABILITIES.map((a) => `<div class="abil-row" data-abil="${a.key}">
-          <span class="nm">${a.label}${a.hint ? `<i>${a.hint}</i>` : ''}</span>
-          <span class="dots">
-            ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="dot" data-v="${n}"
-              aria-pressed="${(m0.abil?.[a.key] || 0) >= n}" aria-label="${a.label} ${n}점"></button>`).join('')}
-            <button type="button" class="clr" data-v="0" aria-label="${a.label} 지우기">×</button>
-          </span>
-        </div>`).join('')}
+        ${ABILITIES.map((a) => abilRow(a, m0.abil?.[a.key], m0, `data-abil="${a.key}"`, testRecOf(m0, a.key))).join('')}
       </div>
     </div>
     <div class="togglerow"><label for="f-gk">골키퍼 가능</label><button type="button" class="switch" id="f-gk" aria-pressed="${!!m0.gk}"></button></div>
@@ -1500,10 +1734,31 @@ function memberModal(existing) {
     // 새 회원 입력 중 새로고침돼도 이름이 날아가지 않게 (수정 폼은 이미 저장된 값이라 제외)
     const nameDraft = existing ? null : bindDraft(m, 'member-name', '#f-name');
     const abil = Object.fromEntries(ABILITIES.map((a) => [a.key, m0.abil?.[a.key] ?? null]));
+    // v0.6.0: 측정 기록은 폼 안에서 들고 있다가 저장할 때 한 번에 반영한다
+    const tests = Object.fromEntries(TESTS.map((t) => [t.key, m0.tests?.[t.key] ? { ...m0.tests[t.key] } : null]));
+    const curGender = () => ($('#f-gender [data-g][aria-pressed="true"]', m)?.dataset.g || null);
+    const applyTestLocal = (tk) => {
+      const t = TESTS.find((x) => x.key === tk);
+      const rec = tests[tk];
+      if (!t || !rec || rec.manual === true) return;
+      const sc = store.club.scoreForTest(tk, rec.sec, curGender());
+      if (sc != null) abil[t.abil] = sc;
+    };
     const paintAbil = () => {
       for (const a of ABILITIES) {
         const row = $(`[data-abil="${a.key}"]`, m);
         if (!row) continue;
+        // 측정 항목은 잠금 여부에 따라 점/기록칸이 바뀌므로 줄을 통째로 다시 그린다
+        const t = testForAbil(a.key);
+        if (t) {
+          const focused = document.activeElement?.dataset?.test === t.key;
+          if (!focused) {
+            row.outerHTML = abilRow(a, abil[a.key], { ...m0, gender: curGender() }, `data-abil="${a.key}"`, tests[t.key]);
+            continue;
+          }
+          const au = $('[data-tauto]', row);
+          if (au) { au.textContent = abil[a.key] ? `${abil[a.key]}점` : '–'; au.classList.toggle('none', !abil[a.key]); }
+        }
         $$('.dot', row).forEach((b) => b.setAttribute('aria-pressed', String((abil[a.key] || 0) >= Number(b.dataset.v))));
         row.classList.toggle('empty', abil[a.key] == null);
       }
@@ -1516,7 +1771,40 @@ function memberModal(existing) {
         auto.querySelector('span').textContent = avg != null ? '아래 6항목 평균입니다' : '간단 체크를 입력하면 자동으로 계산됩니다';
       }
     };
+    m.addEventListener('change', (e) => {
+      const tin = e.target.closest('.abil-row .tin');
+      if (!tin) return;
+      const tk = tin.dataset.test;
+      const raw = tin.value.trim();
+      if (!raw) { tests[tk] = null; paintAbil(); return; }
+      const sec = parseTestInput(tk, raw);
+      if (sec == null) { toast('기록 형식을 확인해 주세요 (예: 9.4 또는 7:20)', 'err'); return; }
+      tests[tk] = { sec, at: new Date().toISOString(), manual: false };
+      applyTestLocal(tk);
+      paintAbil();
+      toast(`${formatTestValue(tk, sec)} → ${abil[TESTS.find((x) => x.key === tk).abil]}점`);
+    });
     m.addEventListener('click', async (e) => {
+      // 항목 이름 → 5단계 기준 시트
+      const rb = e.target.closest('.abil-row [data-rubric]');
+      if (rb) {
+        const key = rb.dataset.rubric;
+        const t = testForAbil(key);
+        const lockedHere = !!(t && tests[t.key] && tests[t.key].manual !== true);
+        const who = { ...m0, gender: curGender() };
+        return rubricSheet(key, who, abil[key], lockedHere ? null : (lv) => { abil[key] = lv; paintAbil(); });
+      }
+      // 기록 잠금/해제
+      const lk = e.target.closest('.abil-row [data-tlock]');
+      if (lk) {
+        const tk = lk.dataset.tlock;
+        if (!tests[tk]) return;
+        tests[tk].manual = lk.getAttribute('aria-pressed') === 'true';
+        applyTestLocal(tk);
+        paintAbil();
+        toast(tests[tk].manual ? '이 항목을 손으로 매길 수 있습니다' : '기록 기준으로 되돌렸습니다');
+        return;
+      }
       const ab = e.target.closest('.abil-row .dot, .abil-row .clr');
       if (ab) {
         const key = ab.closest('.abil-row').dataset.abil;
@@ -1577,7 +1865,7 @@ function memberModal(existing) {
       const birthRaw = $('#f-birth', m).value.trim();
       const birthYear = parseBirthYear(birthRaw);
       if (birthRaw && !birthYear) { toast('출생년도를 확인해 주세요 (예: 90 또는 1990)', 'err'); return; }
-      const data = { name, pos, team, birthYear, abil, gender, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
+      const data = { name, pos, team, birthYear, abil, tests, gender, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
       if (existing) {
         const now = new Date().toISOString();
         if (JSON.stringify(existing.abil) !== JSON.stringify(data.abil)) {
@@ -1588,6 +1876,7 @@ function memberModal(existing) {
         toast('수정했습니다');
       }
       else { store.members.add(data); nameDraft?.clear(); toast(`${name} 님 추가`); }
+      store.members.recomputeTestScores();   // 성별이 바뀜었을 수 있으니 기록 기준 점수를 다시 맞춘다
       closeModal(); render();
     });
   });
@@ -1850,7 +2139,7 @@ function doShuffleAll(reshuffle = false) {
   if (attendees.length < 2) { toast('참석자가 2명 이상이어야 합니다', 'err'); return; }
   const plan = currentPlan(g);
   const n = ui.groupCount || plan?.teams.length || suggestGroupCount(attendees.length, 4);
-  const res = balanceTeams(attendees, n, { lock: womenLock(attendees) });
+  const res = balanceTeams(wt(attendees), n, { lock: womenLock(attendees) });
   applyPlan({
     matchId: g.id, mode: 'shuffle', groups: [],
     teams: res.teams.map((t) => t.map((p) => p.id)),
@@ -1895,7 +2184,8 @@ async function exportTeamsPNG() {
   const plan = currentPlan(g);
   if (!plan?.teams?.length) { toast('먼저 팀을 나눠 주세요', 'err'); return; }
   const teams = plan.teams.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
-  const st = teams.map(groupStat);
+  const st = teams.map((list) => groupStat(wt(list)));
+  const squad = store.club.squadSize();
   const labels = teams.map((_, i) => labelOf(plan, i));
   const colors = teams.map((_, i) => groupColor(plan.groups[i], i, plan.mode));
   const maxRows = Math.max(...teams.map((t) => t.length));
@@ -1928,13 +2218,16 @@ async function exportTeamsPNG() {
     x.font = '900 32px -apple-system, Malgun Gothic, sans-serif';
     x.fillText(labels[i], 76, y + 44);
     x.font = '800 24px -apple-system, Malgun Gothic, sans-serif';
-    const meta = `${t.length}명 · 전력 ${st[i].total} · 평균 ${st[i].avg}`;
+    const over = t.length > squad ? ` (선발 ${squad}+교체 ${t.length - squad})` : '';
+    const meta = `${t.length}명${over} · 전력 ${st[i].total} · 평균 ${st[i].avg}`;
     x.fillText(meta, W - 76 - x.measureText(meta).width, y + 43);
     t.forEach((p, j) => {
       const ry = y + 66 + 48 + j * rowH;
       x.fillStyle = '#241f1a';
       x.font = '700 30px -apple-system, Malgun Gothic, sans-serif';
-      const label = `${j + 1}. ${p.name}${store.club.coachTeamOf(p.id) ? ' (감독)' : ''}`;
+      const isBench = j >= squad && t.length > squad;
+      const label = `${j + 1}. ${p.name}${store.club.coachTeamOf(p.id) ? ' (감독)' : ''}${isBench ? ' · 교체' : ''}`;
+      x.fillStyle = isBench ? '#8a8272' : '#241f1a';
       x.fillText(label, 80, ry);
       if (p.gk) {
         x.fillStyle = colors[i];
@@ -2096,11 +2389,21 @@ function bindEvents() {
       renderTeam();
       return;
     }
+    const gcAlt = t.closest('[data-gc-alt]');
+    if (gcAlt) { ui.groupCount = Number(gcAlt.dataset.gcAlt); ui.teamPlan = null; renderTeam(); return; }
+    if (t.closest('#btn-reco-again')) { ui.groupCount = null; ui.teamPlan = null; renderTeam(); return; }
+    // 선발 ↔ 교체 이동 (v0.6.0) — 카드 안의 화살표만 반응한다
+    const bench = t.closest('[data-bench]');
+    if (bench) {
+      const [ti, pi] = bench.dataset.bench.split(':').map(Number);
+      return moveBench(ti, pi);
+    }
     const ad = t.closest('[data-adopt]');
     if (ad) return adoptSuggestion(Number(ad.dataset.adopt));
     if (t.closest('#btn-shuffle-all')) return doShuffleAll(false);
     if (t.closest('#btn-reshuffle')) return doReshuffle();
     if (t.closest('#btn-team-names, #btn-team-names-2')) return teamNameModal();
+    if (t.closest('#btn-rubric')) return rubricModal();
     const sw = t.closest('[data-swap]');
     if (sw) {
       const [a, b] = sw.dataset.swap.split(':').map(Number);
@@ -2190,6 +2493,30 @@ function bindEvents() {
     if (ct) { ui.coachTeam = ct.dataset.ct; ui.coachOpen = null; return renderMembers(); }
     const copen = t.closest('[data-copen]');
     if (copen) { ui.coachOpen = ui.coachOpen === copen.dataset.copen ? null : copen.dataset.copen; return renderMembers(); }
+    // 항목 이름 탭 → 그 항목의 5단계 기준 시트 (v0.6.0)
+    const crub = t.closest('[data-cabil] [data-rubric]');
+    if (crub) {
+      const [id, akey] = crub.closest('[data-cabil]').dataset.cabil.split(':');
+      const mm = store.members.byId(id);
+      if (!mm) return;
+      const locked = store.members.isTestLocked(id, akey);
+      return rubricSheet(akey, mm, mm.abil?.[akey] ?? null, locked ? null : (lv) => {
+        store.members.setAbil(id, { [akey]: lv }, myRoleLabel());
+        ui.teamPlan = null;
+        renderMembers();
+      });
+    }
+    // 기록 잠금/해제
+    const clock = t.closest('[data-cabil] [data-tlock]');
+    if (clock) {
+      const [id] = clock.closest('[data-cabil]').dataset.cabil.split(':');
+      const tk = clock.dataset.tlock;
+      const wasLocked = clock.getAttribute('aria-pressed') === 'true';
+      store.members.setTestManual(id, tk, wasLocked);   // 잠겨 있었으면 → 수동 허용
+      toast(wasLocked ? '이 항목을 손으로 매길 수 있습니다' : '기록 기준으로 되돌렸습니다');
+      ui.teamPlan = null;
+      return renderMembers();
+    }
     const cab = t.closest('[data-cabil] .dot, [data-cabil] .clr');
     if (cab) {
       const [id, akey] = cab.closest('[data-cabil]').dataset.cabil.split(':');
@@ -2238,6 +2565,21 @@ function bindEvents() {
 
   document.addEventListener('change', (e) => {
     if (e.target.id === 'att-match') { ui.attendMatchId = e.target.value; renderAttend(); }
+    const tin = e.target.closest?.('[data-cabil] .tin');
+    if (tin) {
+      const [id] = tin.closest('[data-cabil]').dataset.cabil.split(':');
+      const tk = tin.dataset.test;
+      const raw = tin.value.trim();
+      if (!raw) { store.members.setTest(id, tk, null); toast('기록을 지웠습니다'); ui.teamPlan = null; return renderMembers(); }
+      const sec = parseTestInput(tk, raw);
+      if (sec == null) { toast('기록 형식을 확인해 주세요 (예: 9.4 또는 7:20)', 'err'); return; }
+      store.members.setTest(id, tk, sec, { by: myRoleLabel() });
+      const mm = store.members.byId(id);
+      const ak = TESTS.find((x) => x.key === tk)?.abil;
+      toast(`${formatTestValue(tk, sec)} → ${mm?.abil?.[ak] ?? '-'}점`);
+      ui.teamPlan = null;
+      return renderMembers();
+    }
     if (e.target.id === 'team-match') { ui.teamMatchId = e.target.value; ui.teamPlan = null; ui.groupCount = null; ui.teamSel = null; renderTeam(); }
     if (e.target.id === 'file-import' && e.target.files[0]) { importJSONFile(e.target.files[0]); e.target.value = ''; }
   });

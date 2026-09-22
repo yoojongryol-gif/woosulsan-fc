@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.9';
+export const MODULE_VERSION = 'v0.6.0';
 
 export const SCHEMA_VERSION = 2;
 
@@ -51,6 +51,179 @@ export const ABILITIES = [
   { key: 'physical', label: '피지컬', hint: '몸싸움' },
 ];
 export const ABILITY_KEYS = ABILITIES.map((a) => a.key);
+
+/* ---------------- 평가 기준표 (v0.6.0, 2026-09-22 사장님) ----------------
+ * "남자와 여자 기준이 달라야 되는데 기준을 잡아놓고 평가를 해야 될 듯"
+ * - 남성 기준: 이 동호회 남성 회원들 사이의 비교
+ * - 여성 기준: 여성 회원끼리 비교하되, 혼성 경기에서 어느 정도인지를 함께 적는다
+ *   (예: 스피드 5 = 여성 중 최고 속도이고 남성 평균과 대등)
+ * 각 줄은 22자 이내. 설정 → 평가 기준표에서 사장님이 고칠 수 있고, 기본값으로 되돌릴 수 있다.
+ */
+export const RUBRIC_GENDERS = [
+  { key: 'male', label: '남성', badge: '남성 회원 기준' },
+  { key: 'female', label: '여성', badge: '여성 회원 기준(혼성 경기)' },
+];
+export const DEFAULT_RUBRIC = {
+  male: {
+    speed: ['걷는 수준·쉽게 따라잡힘', '느리지만 위치로 보완', '팀 평균 속도', '빠름·역습 가담 가능', '팀 최고속·뒷공간 전담'],
+    stamina: ['15분 후 급격히 처짐', '전반만 뛸 수 있음', '풀타임 무난', '후반에도 압박 유지', '연속 경기도 소화'],
+    basic: ['트래핑 불안', '짧은 패스는 가능', '한쪽 발은 안정', '압박 속에서도 패스', '볼 키핑·공격 전환 주도'],
+    shoot: ['골대 안에 넣기 어려움', '근거리만 마무리', '박스 안에서 정확', '중거리·감아차기 가능', '결정력 팀 1위'],
+    defense: ['위치 잡기 어려움', '1:1에서 밀림', '기본 커버는 됨', '태클·가로채기 능숙', '수비 조직 지휘'],
+    physical: ['몸싸움 회피', '몸싸움에서 밀림', '대등하게 버팀', '몸싸움 우위', '몸싸움 압도'],
+  },
+  female: {
+    speed: ['걷는 수준·쉽게 따라잡힘', '여성 중 느린 편·위치로 보완', '여성 평균 속도', '여성 중 빠름·역습 가담', '여성 최고속·남성 평균과 대등'],
+    stamina: ['15분 후 급격히 처짐', '전반만·여성 중 낮은 편', '여성 평균·풀타임 무난', '후반에도 압박 유지', '여성 최고·연속 경기 가능'],
+    basic: ['트래핑 불안', '짧은 패스는 가능', '여성 평균·한쪽 발 안정', '압박 속에서도 패스 성공', '여성 최고·혼성서도 키핑'],
+    shoot: ['골대 안에 넣기 어려움', '근거리만 마무리', '여성 평균·박스 안 정확', '중거리·감아차기 가능', '여성 최고·혼성서도 위협'],
+    defense: ['위치 잡기 어려움', '1:1에서 밀림', '여성 평균·기본 커버', '태클·가로채기 능숙', '여성 최고·수비 조직 지휘'],
+    physical: ['몸싸움 회피', '여성 중에도 밀림', '여성끼리는 대등', '여성 중 우위·혼성서 버팀', '여성 최고·남성과도 대등'],
+  },
+};
+/* ---------------- 측정 기록 (v0.6.0, 2026-09-22 사장님) ----------------
+ * "스피드·지구력은 각각 20미터 왕복 달리기와 1.5키로 달리기로"
+ * 기록이 있으면 성별 기준표의 경계값으로 1~5 를 자동 환산해 넣는다(사람이 매기지 않는다).
+ * 경계값은 동호회 성인 기준 초안이라, 첫 측정 뒤 사장님이 설정에서 조정하는 것을 전제로 한다.
+ */
+export const TESTS = [
+  {
+    key: 'shuttle20', abil: 'speed', label: '20m 왕복 달리기', unit: 'sec',
+    hint: '20m 가서 찍고 돌아오기(총 40m)', placeholder: '예: 9.4', suffix: '초',
+  },
+  {
+    key: 'run1500', abil: 'stamina', label: '1.5km 달리기', unit: 'mmss',
+    hint: '', placeholder: '예: 7:20', suffix: '',
+  },
+];
+export const TEST_KEYS = TESTS.map((t) => t.key);
+/** abil 항목 → 측정 종목 (스피드·지구력만 있다) */
+export function testForAbil(abilKey) { return TESTS.find((t) => t.abil === abilKey) || null; }
+
+/** 5·4·3·2 등급의 상한선 (초). 이보다 느리면 1점. 작을수록 좋다. */
+export const DEFAULT_TEST_THRESHOLDS = {
+  shuttle20: { male: [8, 9, 10, 11.5], female: [9.5, 10.5, 11.5, 13] },
+  run1500: { male: [360, 420, 480, 570], female: [450, 510, 585, 660] },
+};
+export function normalizeTestThresholds(raw) {
+  const out = {};
+  for (const t of TESTS) {
+    out[t.key] = {};
+    for (const g of ['male', 'female']) {
+      const def = DEFAULT_TEST_THRESHOLDS[t.key][g];
+      const got = Array.isArray(raw?.[t.key]?.[g]) ? raw[t.key][g] : null;
+      const vals = def.map((d, i) => {
+        const n = Number(got?.[i]);
+        return Number.isFinite(n) && n > 0 ? Math.round(n * 10) / 10 : d;
+      });
+      // 5→2 로 갈수록 느려져야 한다 (오름차순 보정)
+      for (let i = 1; i < vals.length; i += 1) if (vals[i] <= vals[i - 1]) vals[i] = Math.round((vals[i - 1] + 0.1) * 10) / 10;
+      out[t.key][g] = vals;
+    }
+  }
+  return out;
+}
+
+/** "9.4" → 9.4초 / "7:20" → 440초 / "440" → 440초 (분:초는 콜론이 있을 때만) */
+export function parseTestInput(testKey, raw) {
+  const txt = String(raw ?? '').trim().replace(/\s/g, '');
+  if (!txt) return null;
+  if (txt.includes(':')) {
+    const [mm, ss] = txt.split(':');
+    const m = Number(mm); const sec = Number(ss);
+    if (!Number.isFinite(m) || !Number.isFinite(sec) || sec >= 60 || m < 0 || sec < 0) return null;
+    return Math.round((m * 60 + sec) * 10) / 10;
+  }
+  const n = Number(txt);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 10) / 10;
+}
+/** 초 → 화면 표기 ("9.4초" / "7:20") */
+export function formatTestValue(testKey, sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n)) return '';
+  const t = TESTS.find((x) => x.key === testKey);
+  if (t?.unit === 'mmss') {
+    const m = Math.floor(n / 60);
+    const r = Math.round(n - m * 60);
+    return `${m}:${String(r).padStart(2, '0')}`;
+  }
+  return `${n.toFixed(1)}초`;   // 8 → "8.0초" (경계값 표기 통일)
+}
+/** 기록(초) → 1~5 점 */
+export function scoreFromTest(testKey, sec, gender, thresholds) {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const g = rubricKeyFor(gender);
+  const th = (thresholds || DEFAULT_TEST_THRESHOLDS)[testKey]?.[g] || DEFAULT_TEST_THRESHOLDS[testKey][g];
+  if (n <= th[0]) return 5;
+  if (n <= th[1]) return 4;
+  if (n <= th[2]) return 3;
+  if (n <= th[3]) return 2;
+  return 1;
+}
+/** 기준표 한 줄에 끼워 넣을 경계 문구 — 예: "8.0초 이하", "9:30 초과" */
+export function testBoundLabel(testKey, level, gender, thresholds) {
+  const g = rubricKeyFor(gender);
+  const th = (thresholds || DEFAULT_TEST_THRESHOLDS)[testKey]?.[g] || DEFAULT_TEST_THRESHOLDS[testKey][g];
+  const i = Math.round(Number(level)) - 1;   // level 5 → index 0
+  if (i < 0 || i > 4) return '';
+  if (level === 1) return `${formatTestValue(testKey, th[3])} 초과`;
+  return `${formatTestValue(testKey, th[5 - level])} 이하`;
+}
+
+export function normalizeTests(raw) {
+  const out = {};
+  for (const t of TESTS) {
+    const got = raw?.[t.key];
+    const sec = Number(got?.sec);
+    out[t.key] = Number.isFinite(sec) && sec > 0
+      ? { sec: Math.round(sec * 10) / 10, at: typeof got.at === 'string' ? got.at : null, manual: got.manual === true }
+      : null;
+  }
+  return out;
+}
+
+/** 회원 성별 → 기준표 키 (미입력은 남성 기준으로 보되 화면에 "성별 미입력"을 표시한다) */
+export function rubricKeyFor(gender) { return gender === '여' ? 'female' : 'male'; }
+
+/** 저장된 값 + 기본값을 합쳐 6항목 × 5단계를 항상 채운 기준표로 만든다 */
+export function normalizeRubric(raw) {
+  const out = {};
+  for (const g of RUBRIC_GENDERS) {
+    out[g.key] = {};
+    for (const k of ABILITY_KEYS) {
+      const def = DEFAULT_RUBRIC[g.key][k];
+      const got = raw?.[g.key]?.[k];
+      out[g.key][k] = [0, 1, 2, 3, 4].map((i) => {
+        const v = Array.isArray(got) ? got[i] : undefined;
+        const clean = typeof v === 'string' ? v.trim().slice(0, 40) : '';
+        return clean || def[i];
+      });
+    }
+  }
+  return out;
+}
+
+/* ---------------- 혼성 환산 계수 (v0.6.0) ----------------
+ * 여성 점수는 "여성 기준" 으로 매겨지므로, 팀 전력을 남성 기준 한 자로 합칠 때
+ * 여성 회원의 종합 실력에 곱할 값. 1.0 = 끄기(지금까지와 동일).
+ */
+/* 팀당 기본 인원 (v0.6.0 사장님: "축구 경기니 11대11이 기본 인원으로") */
+export const SQUAD_SIZES = [5, 6, 7, 9, 11];
+export const DEFAULT_SQUAD_SIZE = 11;
+export function clampSquadSize(v) {
+  const n = Math.round(Number(v));
+  return SQUAD_SIZES.includes(n) ? n : DEFAULT_SQUAD_SIZE;
+}
+
+export const MIXED_FACTOR_MIN = 0.5;
+export const MIXED_FACTOR_MAX = 1;
+export function clampMixedFactor(v) {
+  const n = Math.round(Number(v) * 10) / 10;
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(MIXED_FACTOR_MAX, Math.max(MIXED_FACTOR_MIN, n));
+}
 
 /* ---------------- 포지션 토큰 ----------------
  * 사장님이 실제로 붙여넣는 형식: "교 진혜린 95 여 포워드", "정지원 96 여 레프트 윙", "정성현 85 남 센터백"
@@ -219,6 +392,17 @@ export function effectiveSkill(member) {
 /** 자동 평균이 아니라 예전 수동 값을 쓰는 중인가 */
 export function isUnrated(member) { return abilAvg(member?.abil) == null; }
 
+/**
+ * 팀 전력 계산용 실력 (v0.6.0)
+ * 여성 회원의 점수는 여성 기준이라, 혼성 환산 계수를 곱해 남성 기준 한 자로 맞춘다.
+ * 계수 1.0 이면 종합 실력 그대로 → 기존 동작과 완전히 같다.
+ */
+export function weightedSkill(member, factor = 1) {
+  const base = effectiveSkill(member);
+  if (member?.gender !== '여') return base;
+  return Math.round(base * clampMixedFactor(factor) * 10) / 10;
+}
+
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
@@ -226,6 +410,10 @@ export function emptyState() {
       name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES },
       teamAliases: { ...DEFAULT_TEAM_ALIASES },
       mixedTeams: ['D'], lockWomen: true,   // 체육(D)이 혼성팀 (사장님 확정)
+      rubric: normalizeRubric(null),        // 남/여 평가 기준표 (v0.6.0)
+      tests: normalizeTestThresholds(null), // 측정 경계값 (v0.6.0)
+      mixedFactor: 1,                       // 혼성 환산 계수 — 1.0 = 끔
+      squadSize: DEFAULT_SQUAD_SIZE,        // 팀당 기본 인원 (11대11)
       coaches: { A: null, B: null, C: null, D: null }, // 팀별 감독 memberId (단일 출처)
     },
     members: [],
@@ -411,6 +599,11 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       : ['D'];
     if (untouched && !raw?.club?.mixedTeams?.length) s.club.mixedTeams = ['D'];
     s.club.lockWomen = raw?.club?.lockWomen !== false; // 기본 ON
+    // v0.6.0: 기준표는 저장된 문구를 살리고 빠진 칸만 기본값으로 채운다
+    s.club.rubric = normalizeRubric(raw?.club?.rubric);
+    s.club.tests = normalizeTestThresholds(raw?.club?.tests);
+    s.club.mixedFactor = clampMixedFactor(raw?.club?.mixedFactor ?? 1);
+    s.club.squadSize = clampSquadSize(raw?.club?.squadSize ?? DEFAULT_SQUAD_SIZE);
     s.club.coaches = Object.fromEntries(TEAM_KEYS.map((k) => {
       const v = raw?.club?.coaches?.[k];
       return [k, typeof v === 'string' && v ? v : null];
@@ -419,6 +612,16 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.matches = Array.isArray(s.matches) ? s.matches.map(normalizeMatch) : [];
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
     return s;
+  }
+
+  /** 기록이 있고 잠겨 있으면 그 항목 점수를 기록에서 다시 만든다 */
+  function applyTestScore(member, test) {
+    const rec = member.tests?.[test.key];
+    if (!rec || rec.manual === true) return false;
+    const score = scoreFromTest(test.key, rec.sec, member.gender, state.club?.tests);
+    if (score == null) return false;
+    member.abil = { ...(member.abil || {}), [test.abil]: score };
+    return true;
   }
 
   function normalizeMember(m) {
@@ -433,6 +636,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
       abil,                                   // 간단 체크 6항목 (미입력은 null)
+      tests: normalizeTests(m.tests),         // 측정 기록 (v0.6.0)
       gender: parseGender(m.gender),         // '남' | '여' | null
       // 평가 메타 — 3단계에서 감독 uid 가 들어갈 자리 (지금은 'owner')
       skillUpdatedAt: m.skillUpdatedAt || null,
@@ -451,7 +655,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       time: x.time || '20:00',
       place: x.place || '',
       status: ['예정', '확정', '종료'].includes(x.status) ? x.status : '예정',
-      teamCount: [2, 3, 4].includes(x.teamCount) ? x.teamCount : 2,
+      // v0.6.0: 팀 수는 "미정(null)" 이 기본 — 팀 탭에서 확정할 때 채워진다
+      teamCount: [2, 3, 4].includes(x.teamCount) ? x.teamCount : null,
       teams: Array.isArray(x.teams) ? x.teams : [],
       // 오늘의 팀 구성 방식: 고정 팀 합치기(merge) 또는 소속 무시 재배분(shuffle)
       teamPlan: x.teamPlan && typeof x.teamPlan === 'object'
@@ -533,6 +738,62 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         return added;
       },
       byTeam(key) { return state.members.filter((m) => m.active && m.team === key); },
+      /**
+       * 측정 기록 저장 (v0.6.0) — 기록을 넣으면 성별 경계값으로 1~5 를 자동 환산해
+       * abil.speed / abil.stamina 에 그대로 반영한다. sec 가 null 이면 기록 삭제.
+       */
+      setTest(id, testKey, sec, { at = null, by = 'owner' } = {}) {
+        const m = api.members.byId(id);
+        const t = TESTS.find((x) => x.key === testKey);
+        if (!m || !t) return null;
+        const now = new Date().toISOString();
+        m.tests = normalizeTests(m.tests);
+        if (sec == null) {
+          m.tests[testKey] = null;
+        } else {
+          const n = Math.round(Number(sec) * 10) / 10;
+          if (!Number.isFinite(n) || n <= 0) return null;
+          m.tests[testKey] = { sec: n, at: at || now, manual: false };
+        }
+        applyTestScore(m, t);
+        m.abilUpdatedAt = now; m.abilUpdatedBy = by;
+        m.skillUpdatedAt = now; m.skillUpdatedBy = by;
+        m.skill = clampSkill(abilAvg(m.abil) ?? m.skill);
+        touch();
+        return m;
+      },
+      /** 기록이 있어도 점수를 손으로 고칠 수 있게 잠금 해제 / 다시 잠금 */
+      setTestManual(id, testKey, manual) {
+        const m = api.members.byId(id);
+        const t = TESTS.find((x) => x.key === testKey);
+        if (!m || !t) return null;
+        m.tests = normalizeTests(m.tests);
+        if (!m.tests[testKey]) return null;
+        m.tests[testKey].manual = manual === true;
+        applyTestScore(m, t);
+        m.skill = clampSkill(abilAvg(m.abil) ?? m.skill);
+        touch();
+        return m;
+      },
+      /** 기록이 잠겨 있으면(=자동) 그 항목은 손으로 못 고친다 */
+      isTestLocked(id, abilKey) {
+        const t = testForAbil(abilKey);
+        if (!t) return false;
+        const rec = api.members.byId(id)?.tests?.[t.key];
+        return !!rec && rec.manual !== true;
+      },
+      /** 경계값이 바뀌면 기록이 있는 회원의 점수를 모두 다시 계산한다 */
+      recomputeTestScores() {
+        let changed = 0;
+        for (const m of state.members) {
+          m.tests = normalizeTests(m.tests);
+          for (const t of TESTS) if (applyTestScore(m, t)) changed += 1;
+          const avg = abilAvg(m.abil);
+          if (avg != null) m.skill = clampSkill(avg);
+        }
+        return changed;
+      },
+
       /** 종합 실력 직접 지정 — v0.5.6부터는 간단 체크가 비어 있을 때만 쓰인다(있으면 평균이 이긴다) */
       setSkill(id, skill, by = 'owner') {
         return api.members.update(id, { skill, skillUpdatedAt: new Date().toISOString(), skillUpdatedBy: by });
@@ -704,6 +965,87 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         state.club.teamAliases = { ...(state.club.teamAliases || {}), [key]: clean || DEFAULT_TEAM_ALIASES[key] };
         touch();
       },
+      /* ----- 평가 기준표 (v0.6.0) ----- */
+      /** 한 성별의 기준표 전체 — gender 는 '남'/'여' 또는 'male'/'female' */
+      rubric(gender = 'male') {
+        const key = gender === 'female' || gender === 'male' ? gender : rubricKeyFor(gender);
+        if (!state.club.rubric) state.club.rubric = normalizeRubric(null);
+        return state.club.rubric[key];
+      },
+      /** 남/여 둘 다 */
+      rubricAll() {
+        if (!state.club.rubric) state.club.rubric = normalizeRubric(null);
+        return state.club.rubric;
+      },
+      /** 한 줄 문구 (level 은 1~5). 측정 종목이 있는 항목은 경계값을 앞에 붙인다 */
+      rubricText(itemKey, level, gender = 'male') {
+        const rows = api.club.rubric(gender)?.[itemKey];
+        const i = Math.round(Number(level)) - 1;
+        const base = Array.isArray(rows) && rows[i] ? rows[i] : '';
+        const t = testForAbil(itemKey);
+        if (!t) return base;
+        const bound = api.club.testBound(t.key, level, gender);
+        return bound ? `${bound} · ${base}` : base;
+      },
+      /** 한 칸 수정 */
+      setRubricText(genderKey, itemKey, level, text) {
+        const g = genderKey === 'female' ? 'female' : 'male';
+        if (!ABILITY_KEYS.includes(itemKey)) return;
+        const i = Math.round(Number(level)) - 1;
+        if (i < 0 || i > 4) return;
+        if (!state.club.rubric) state.club.rubric = normalizeRubric(null);
+        const clean = String(text ?? '').trim().slice(0, 40);
+        state.club.rubric[g][itemKey][i] = clean || DEFAULT_RUBRIC[g][itemKey][i];
+        touch();
+      },
+      /** 기본값으로 되돌리기 (genderKey 를 주면 그 성별만) */
+      resetRubric(genderKey) {
+        const fresh = normalizeRubric(null);
+        if (genderKey === 'male' || genderKey === 'female') {
+          if (!state.club.rubric) state.club.rubric = fresh;
+          state.club.rubric[genderKey] = fresh[genderKey];
+        } else {
+          state.club.rubric = fresh;
+        }
+        touch();
+      },
+      /* ----- 측정 경계값 ----- */
+      testThresholds() {
+        if (!state.club.tests) state.club.tests = normalizeTestThresholds(null);
+        return state.club.tests;
+      },
+      /** 한 경계값 수정 (level 5~2 → idx 0~3) */
+      setTestThreshold(testKey, genderKey, idx, value) {
+        const g = genderKey === 'female' ? 'female' : 'male';
+        if (!TEST_KEYS.includes(testKey)) return;
+        const i = Math.round(Number(idx));
+        if (i < 0 || i > 3) return;
+        const cur = api.club.testThresholds();
+        const next = { ...cur, [testKey]: { ...cur[testKey], [g]: [...cur[testKey][g]] } };
+        const n = Number(value);
+        next[testKey][g][i] = Number.isFinite(n) && n > 0 ? Math.round(n * 10) / 10 : DEFAULT_TEST_THRESHOLDS[testKey][g][i];
+        state.club.tests = normalizeTestThresholds(next);
+        api.members.recomputeTestScores();
+        touch();
+      },
+      resetTestThresholds() {
+        state.club.tests = normalizeTestThresholds(null);
+        api.members.recomputeTestScores();
+        touch();
+      },
+      /** 기록 → 점수 (현재 경계값 기준) */
+      scoreForTest(testKey, sec, gender) { return scoreFromTest(testKey, sec, gender, api.club.testThresholds()); },
+      /** 기준표 한 줄에 붙일 경계 문구 */
+      testBound(testKey, level, gender) { return testBoundLabel(testKey, level, gender, api.club.testThresholds()); },
+
+      /** 팀당 기본 인원 */
+      squadSize() { return clampSquadSize(state.club.squadSize ?? DEFAULT_SQUAD_SIZE); },
+      setSquadSize(v) { state.club.squadSize = clampSquadSize(v); touch(); },
+
+      /** 혼성 환산 계수 */
+      mixedFactor() { return clampMixedFactor(state.club.mixedFactor ?? 1); },
+      setMixedFactor(v) { state.club.mixedFactor = clampMixedFactor(v); touch(); },
+
       /** 혼성팀 여부 */
       isMixed(key) { return (state.club.mixedTeams || []).includes(key); },
       mixedTeams() { return [...(state.club.mixedTeams || [])]; },

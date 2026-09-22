@@ -8,7 +8,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.5.9';
+export const MODULE_VERSION = 'v0.6.0';
 
 /* ---------- 모듈 버전 섞임 복구 계획 (v0.5.8) ----------
  * 배포 직후 GitHub Pages 는 파일마다 따로 퍼져서 "app.js 만 새것" 인 구간이 생긴다.

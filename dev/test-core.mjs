@@ -155,7 +155,9 @@ console.log('\n[4] 고정 4팀 · 합치기 제안 (v0.3.0)');
   const sug4 = suggestMerges(byTeam, 4);
   ok('4팀 유지 = 합치기 없음', sug4.length === 1 && sug4[0].groups.every((g) => g.length === 1));
 
-  ok('권장 팀 수 (18명·4팀)', suggestGroupCount(18, 4) === 3 && suggestGroupCount(12, 4) === 2 && suggestGroupCount(26, 4) === 4);
+  // v0.6.0: 권장 팀 수는 "팀당 기본 인원"(기본 11) 으로 센다
+  ok('권장 팀 수 (11명 기준)', suggestGroupCount(18, 4) === 2 && suggestGroupCount(33, 4) === 3 && suggestGroupCount(44, 4) === 4);
+  ok('권장 팀 수 (5인제 기준)', suggestGroupCount(18, 4, 5) === 3 && suggestGroupCount(12, 4, 5) === 2);
 
   // 한 팀만 참석 → 제안은 그 팀 하나
   ok('참석 팀 1개면 묶음도 1개', suggestMerges({ A: att.A }, 3)[0].groups.length === 1);
@@ -292,6 +294,123 @@ console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
   await s9.importJSON(s7.exportJSON());
   ok('JSON 왕복 — 능력치 보존', JSON.stringify(s9.members.all()[0].abil) === JSON.stringify(s7.members.all()[0].abil),
     JSON.stringify(s9.members.all()[0].abil));
+}
+
+
+console.log('\n[v0.6.0] 참석 인원 → 오늘 팀 수 권장');
+{
+  const { recommendGroups, evenSplit, splitStarters } = await import('../balance.js');
+  const r19 = recommendGroups(19, { base: 11 });
+  ok('19명 = 2팀 + 3명 부족', r19.count === 2 && r19.short === 3 && r19.bench === 0, r19.reason);
+  const r22 = recommendGroups(22, { base: 11 });
+  ok('22명 = 2팀 딱 맞음', r22.count === 2 && r22.short === 0 && r22.bench === 0, r22.reason);
+  const r24 = recommendGroups(24, { base: 11 });
+  ok('24명 = 2팀 + 교체 2명', r24.count === 2 && r24.bench === 2, r24.reason);
+  ok('24명 대안 = 3팀 로테이션', r24.alts[0]?.count === 3, JSON.stringify(r24.alts));
+  const r30 = recommendGroups(30, { base: 11 });
+  ok('30명 = 2팀 + 교체 8명', r30.count === 2 && r30.bench === 8, r30.reason);
+  ok('33명 = 3팀', recommendGroups(33, { base: 11 }).count === 3);
+  ok('44명 = 4팀', recommendGroups(44, { base: 11 }).count === 4);
+  ok('50명도 4팀이 최대', recommendGroups(50, { base: 11 }).count === 4);
+  ok('이유 문구에 기준 인원 명시', /11명 기준/.test(r24.reason), r24.reason);
+  ok('참석한 소속 팀 수를 넘지 않음', recommendGroups(44, { base: 11, availableTeams: 2 }).count === 2);
+  ok('5인제 19명 = 3팀', recommendGroups(19, { base: 5 }).count === 3);
+  ok('고른 분배', evenSplit(16, 3).join('·') === '5·5·6' && evenSplit(22, 2).join('·') === '11·11');
+  const sp = splitStarters(['a', 'b', 'c', 'd'], 3);
+  ok('선발/교체 분할', sp.starters.length === 3 && sp.bench.join() === 'd');
+}
+
+console.log('\n[v0.6.0] 성별 평가 기준표 · 혼성 환산 계수');
+{
+  const S = await import('../store.js');
+  const s6 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s6.init();
+  ok('기본 기준표 6항목 × 5단계 (남/여)', ['male', 'female'].every((g) => Object.keys(s6.club.rubric(g)).length === 6
+    && Object.values(s6.club.rubric(g)).every((r) => r.length === 5)));
+  ok('남녀 문구가 다르다', s6.club.rubricText('speed', 5, '남') !== s6.club.rubricText('speed', 5, '여'));
+  ok('여성 기준은 혼성 경기를 언급', /남성 평균과 대등/.test(s6.club.rubricText('speed', 5, '여')), s6.club.rubricText('speed', 5, '여'));
+  ok('성별 미입력은 남성 기준', s6.club.rubricText('speed', 5, null) === s6.club.rubricText('speed', 5, '남'));
+  ok('기준 문구에 측정 경계값 자동 삽입', /8\.0초 이하/.test(s6.club.rubricText('speed', 5, '남')), s6.club.rubricText('speed', 5, '남'));
+
+  s6.club.setRubricText('male', 'shoot', 5, '우리 팀 해결사');
+  ok('문구 편집', s6.club.rubric('male').shoot[4] === '우리 팀 해결사');
+  s6.club.resetRubric('male');
+  ok('기본값 되돌리기', s6.club.rubric('male').shoot[4] === '결정력 팀 1위');
+
+  // 혼성 환산 계수
+  const man = s6.members.add({ name: '홍길동', gender: '남', abil: { speed: 4, stamina: 4, basic: 4, shoot: 4, defense: 4, physical: 4 } });
+  const woman = s6.members.add({ name: '김하나', gender: '여', abil: { speed: 4, stamina: 4, basic: 4, shoot: 4, defense: 4, physical: 4 } });
+  ok('계수 1.0 = 그대로', S.weightedSkill(s6.members.byId(woman.id), 1) === 4);
+  ok('계수 0.8 = 여성만 환산', S.weightedSkill(s6.members.byId(woman.id), 0.8) === 3.2
+    && S.weightedSkill(s6.members.byId(man.id), 0.8) === 4);
+  s6.club.setMixedFactor(0.8);
+  ok('계수 저장/반올림', s6.club.mixedFactor() === 0.8);
+  s6.club.setMixedFactor(0.2);
+  ok('계수 하한 0.5', s6.club.mixedFactor() === 0.5);
+  s6.club.setMixedFactor(1);
+
+  // 팀당 기본 인원
+  ok('기본 인원 11', s6.club.squadSize() === 11);
+  s6.club.setSquadSize(7); ok('기본 인원 변경', s6.club.squadSize() === 7);
+  s6.club.setSquadSize(8); ok('허용값만 (8 → 11로 복귀)', s6.club.squadSize() === 11);
+}
+
+console.log('\n[v0.6.0] 측정 기록 → 자동 환산');
+{
+  const S = await import('../store.js');
+  const s7 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s7.init();
+  ok('초.소수 파싱', S.parseTestInput('shuttle20', '9.4') === 9.4);
+  ok('분:초 파싱', S.parseTestInput('run1500', '7:20') === 440);
+  ok('잘못된 입력은 null', S.parseTestInput('run1500', '7:90') === null && S.parseTestInput('shuttle20', '개') === null);
+  ok('표기', S.formatTestValue('run1500', 440) === '7:20' && S.formatTestValue('shuttle20', 8) === '8.0초');
+
+  ok('남 경계 8.0 = 5점 / 8.1 = 4점', S.scoreFromTest('shuttle20', 8, '남') === 5 && S.scoreFromTest('shuttle20', 8.1, '남') === 4);
+  ok('남 11.5 = 2점 / 11.6 = 1점', S.scoreFromTest('shuttle20', 11.5, '남') === 2 && S.scoreFromTest('shuttle20', 11.6, '남') === 1);
+  ok('여 9.5 = 5점 / 13.1 = 1점', S.scoreFromTest('shuttle20', 9.5, '여') === 5 && S.scoreFromTest('shuttle20', 13.1, '여') === 1);
+  ok('1.5km 남 6:00 = 5점', S.scoreFromTest('run1500', 360, '남') === 5 && S.scoreFromTest('run1500', 361, '남') === 4);
+  ok('1.5km 여 7:30 = 5점', S.scoreFromTest('run1500', 450, '여') === 5);
+
+  const w = s7.members.add({ name: '김하나', gender: '여' });
+  s7.members.setTest(w.id, 'shuttle20', 9.4);
+  ok('기록 넣으면 스피드 자동 5점(여성 기준)', s7.members.byId(w.id).abil.speed === 5);
+  ok('측정일 자동 기록', !!s7.members.byId(w.id).tests.shuttle20.at);
+  ok('기록 있으면 잠김', s7.members.isTestLocked(w.id, 'speed') === true);
+  s7.members.setAbil(w.id, { speed: 1 });
+  ok('잠긴 항목은 기록이 이긴다(재계산)', (s7.members.recomputeTestScores(), s7.members.byId(w.id).abil.speed) === 5);
+  s7.members.setTestManual(w.id, 'shuttle20', true);
+  ok('잠금 해제하면 수동 허용', s7.members.isTestLocked(w.id, 'speed') === false);
+  s7.members.setAbil(w.id, { speed: 2 });
+  s7.members.recomputeTestScores();
+  ok('해제 상태에선 수동 점수 유지', s7.members.byId(w.id).abil.speed === 2);
+  s7.members.setTestManual(w.id, 'shuttle20', false);
+  ok('다시 잠그면 기록 기준 복귀', s7.members.byId(w.id).abil.speed === 5);
+
+  // 경계값을 고치면 점수가 따라 움직인다
+  s7.club.setTestThreshold('shuttle20', 'female', 0, 9);   // 5점 경계 9.5 → 9.0
+  ok('경계값 수정 → 자동 재계산', s7.members.byId(w.id).abil.speed === 4, String(s7.members.byId(w.id).abil.speed));
+  s7.club.resetTestThresholds();
+  ok('경계값 되돌리기', s7.members.byId(w.id).abil.speed === 5);
+
+  s7.members.setTest(w.id, 'shuttle20', null);
+  ok('기록 삭제', s7.members.byId(w.id).tests.shuttle20 === null && s7.members.isTestLocked(w.id, 'speed') === false);
+
+  // JSON 왕복
+  s7.members.setTest(w.id, 'run1500', 440);
+  s7.club.setMixedFactor(0.8); s7.club.setSquadSize(7);
+  s7.club.setRubricText('female', 'shoot', 5, '우리 팀 해결사');
+  const s8 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s8.init();
+  await s8.importJSON(s7.exportJSON());
+  ok('JSON 왕복 — 기록', s8.members.all()[0].tests.run1500.sec === 440);
+  ok('JSON 왕복 — 기준표', s8.club.rubric('female').shoot[4] === '우리 팀 해결사');
+  ok('JSON 왕복 — 계수·기본 인원', s8.club.mixedFactor() === 0.8 && s8.club.squadSize() === 7);
+  ok('옛 백업(기준표 없음)도 기본값으로 채움', await (async () => {
+    const s9 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+    await s9.init();
+    await s9.importJSON(JSON.stringify({ data: { members: [{ id: 'm1', name: '홍길동' }], matches: [], tactics: [] } }));
+    return s9.club.rubric('male').speed.length === 5 && s9.club.squadSize() === 11 && s9.members.all()[0].tests.shuttle20 === null;
+  })());
 }
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
