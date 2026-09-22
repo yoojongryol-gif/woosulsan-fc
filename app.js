@@ -24,6 +24,7 @@ const ui = {
   memberQuery: '',
   memberTeam: 'all',    // 회원 탭 팀 필터
   memberSort: 'name',   // 'name' | 'age'
+  rosterDone: null,     // 명단 적용 결과 배너
   showInactive: false,
   _suggestions: [],
 };
@@ -510,7 +511,12 @@ function renderAttend() {
     else counts.none += 1;
   }
 
+  const done = ui.rosterDone && ui.rosterDone.matchId === g.id ? ui.rosterDone : null;
   root.innerHTML = `
+    ${done ? `<div class="gonext">
+      <span>명단 적용 완료 · 참석 ${done.inCount}${done.added ? ` (신규 ${done.added})` : ''} · 불참 ${done.outCount}</span>
+      <button class="btn sm primary" data-go="team" data-match="${g.id}">바로 팀 나누기 →</button>
+    </div>` : ''}
     <div class="selectrow">
       <select id="att-match">${matchOptions(matches, g.id)}</select>
     </div>
@@ -905,6 +911,7 @@ function renderMembers() {
 
 /* ================= 동작 ================= */
 function switchTab(tab, { push = true } = {}) {
+  if (tab !== 'attend') ui.rosterDone = null; // 안내 배너는 한 번만
   ui.tab = tab;
   // 다른 탭에서 바뀐 내용이 반영되도록 진입 시 해당 화면만 다시 그림
   if (tab === 'home') renderHome();
@@ -1291,18 +1298,10 @@ function rosterModal() {
         store.matches.setAttendanceBulk(g.id, map);
         ui.teamPlan = null;
         const outCount = Object.values(map).filter((v) => v === 'out').length;
-        render();
+        ui.rosterDone = { matchId: g.id, inCount, outCount, added };
         closeModal();
+        render();
         toast(`참석 ${inCount}${added ? ` (신규 ${added})` : ''} · 불참 ${outCount}`);
-        // 바로 팀 나누기 안내
-        const box = $('#view-attend');
-        if (box) {
-          const bar = document.createElement('div');
-          bar.className = 'gonext';
-          bar.innerHTML = `<span>참석 ${inCount}명 적용 완료</span><button class="btn sm primary" data-go="team" data-match="${g.id}">바로 팀 나누기 →</button>`;
-          box.prepend(bar);
-          setTimeout(() => bar.remove(), 12000);
-        }
       }
     });
   });
