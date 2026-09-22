@@ -2,7 +2,7 @@
 import { createStore, LocalStorageAdapter, uid } from './store.js';
 import { balanceTeams, suggestTeamCount, statsOf, spreadOf } from './balance.js';
 
-export const APP_VERSION = 'v0.2.0';
+export const APP_VERSION = 'v0.2.1';
 const TEAM_NAMES = ['A팀', 'B팀', 'C팀'];
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a'];
 
@@ -878,7 +878,10 @@ function registerSW() {
       reg.update().catch(() => {});
       if (sessionStorage.getItem(once) === APP_VERSION) return; // 한 번만
       sessionStorage.setItem(once, APP_VERSION);
-      caches.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k)))).then(() => location.reload());
+      // 같은 도메인의 다른 앱 캐시는 건드리지 않는다 (github.io 는 origin 공유)
+      caches.keys()
+        .then((ks) => Promise.all(ks.filter((k) => k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k))))
+        .then(() => location.reload());
     });
     const ping = () => navigator.serviceWorker.controller?.postMessage({ type: 'VERSION' });
     ping();
