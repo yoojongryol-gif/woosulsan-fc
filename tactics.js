@@ -51,7 +51,8 @@ export function layout(preset, players) {
 }
 
 export function initTactics(ctx) {
-  const { store, ui, toast, esc, confirmDialog, shareOrDownload, fmtDate, TEAM_NAMES, TEAM_COLORS, APP_VERSION } = ctx;
+  const { store, ui, toast, esc, confirmDialog, shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS,
+    APP_VERSION, groupLabel, groupColor, currentPlan } = ctx;
   const root = document.getElementById('view-tactics');
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -78,13 +79,30 @@ export function initTactics(ctx) {
   }
   function teamOptions(g) {
     const opts = [];
-    if (g.teams?.length) g.teams.forEach((ids, i) => opts.push({ idx: i, label: TEAM_NAMES[i], ids }));
-    opts.push({ idx: -1, label: '전체 참석자', ids: store.matches.attendees(g.id).map((m) => m.id) });
+    const plan = currentPlan(g);
+    if (plan?.teams?.length) {
+      plan.teams.forEach((ids, i) => opts.push({
+        idx: i,
+        label: `오늘 · ${groupLabel(plan.groups[i], i, plan.mode)}`,
+        color: groupColor(plan.groups[i], i, plan.mode),
+        ids,
+      }));
+    }
+    // 고정 소속 팀 (이번 경기 참석자 기준)
+    const att = store.matches.teamAttendance(g.id);
+    TEAM_KEYS.forEach((k, i) => {
+      if (!att[k].length) return;
+      opts.push({ idx: 100 + i, label: store.club.teamName(k), color: TEAM_COLORS[i], ids: att[k].map((m) => m.id) });
+    });
+    opts.push({ idx: -1, label: '전체 참석자', color: '#1f7a4d', ids: store.matches.attendees(g.id).map((m) => m.id) });
     return opts;
   }
   function playersOf(g) {
-    const opt = teamOptions(g).find((o) => o.idx === t.teamIdx) || teamOptions(g)[0];
+    const list = teamOptions(g);
+    const opt = list.find((o) => o.idx === t.teamIdx) || list[0];
     t.teamIdx = opt.idx;
+    t.teamColor = opt.color || '#1f7a4d';
+    t.teamLabel = opt.label;
     return opt.ids.map((id) => store.members.byId(id)).filter(Boolean);
   }
 
@@ -141,7 +159,7 @@ export function initTactics(ctx) {
       <div class="section-title">저장된 전술 <span class="count">${saved.length}</span></div>
       ${saved.length ? saved.map((s) => `
         <div class="match-row">
-          <div class="d" style="min-width:38px"><div class="n" style="font-size:15px">${esc((TEAM_NAMES[s.team] || '전체').slice(0, 2))}</div></div>
+          <div class="d" style="min-width:44px"><div class="n" style="font-size:13px">${esc(String(s.teamLabel || '전체').slice(0, 4))}</div></div>
           <button class="info" data-load="${s.id}" style="background:none;border:none;padding:0">
             <div class="p">${esc(s.title || '제목 없음')}</div>
             <div class="s">${esc(s.formation)} · 핀 ${s.pins?.length || 0} · 선 ${s.strokes?.length || 0}</div>
@@ -156,7 +174,7 @@ export function initTactics(ctx) {
   }
 
   function pinHTML(p, i) {
-    const color = t.teamIdx >= 0 ? TEAM_COLORS[t.teamIdx] : '#1f7a4d';
+    const color = t.teamColor || '#1f7a4d';
     return `<div class="pin" data-pin="${i}" style="left:${p.x}%;top:${p.y}%">
       <div class="dot" style="background:${p.gk ? '#f2b705' : color}">${p.gk ? 'GK' : (i)}</div>
       <div class="lbl">${esc(p.name)}</div>
@@ -300,7 +318,7 @@ export function initTactics(ctx) {
     ctx.openModal(`
       <h3>전술 저장</h3>
       <div class="field"><label>제목</label><input id="f-title" type="text" placeholder="예: 전반 4-3-3 압박" value="${esc(t.title)}"></div>
-      <div style="font-size:12.5px;color:var(--text-2)">${esc(fmtDate(g.date))} · ${esc(TEAM_NAMES[t.teamIdx] || '전체 참석자')} · ${esc(t.formation)}</div>
+      <div style="font-size:12.5px;color:var(--text-2)">${esc(fmtDate(g.date))} · ${esc(t.teamLabel || '전체 참석자')} · ${esc(t.formation)}</div>
       <div class="foot">
         <button class="btn ghost" data-act="cancel">취소</button>
         <button class="btn primary" data-act="ok">저장</button>
@@ -312,7 +330,7 @@ export function initTactics(ctx) {
         const title = $('#f-title', m).value.trim() || `${t.formation} 전술`;
         const saved = store.tactics.save({
           id: t.editingId || undefined,
-          matchId: g.id, team: t.teamIdx, formation: t.formation, title,
+          matchId: g.id, team: t.teamIdx, teamLabel: t.teamLabel, formation: t.formation, title,
           pins: t.pins.map((p) => ({ ...p })), strokes: t.strokes.map((s) => ({ ...s, points: s.points.map((q) => [...q]) })),
         });
         t.editingId = saved.id; t.title = title;
@@ -326,7 +344,7 @@ export function initTactics(ctx) {
   function loadTactic(id) {
     const s = store.tactics.byId(id);
     if (!s) return;
-    t.matchId = s.matchId; t.teamIdx = s.team; t.formation = s.formation;
+    t.matchId = s.matchId; t.teamIdx = s.team; t.formation = s.formation; t.teamLabel = s.teamLabel;
     t.pins = (s.pins || []).map((p) => ({ ...p }));
     t.strokes = (s.strokes || []).map((x) => ({ ...x, points: (x.points || []).map((q) => [...q]) }));
     t.title = s.title; t.editingId = s.id;
@@ -348,7 +366,7 @@ export function initTactics(ctx) {
     x.fillText(t.title || `${t.formation} 전술`, 24, 44);
     x.fillStyle = '#6b6255';
     x.font = '700 20px -apple-system, Malgun Gothic, sans-serif';
-    x.fillText(`웃을산 FC · ${fmtDate(g.date)} · ${TEAM_NAMES[t.teamIdx] || '전체 참석자'} · ${t.formation}`, 24, 76);
+    x.fillText(`웃을산 FC · ${fmtDate(g.date)} · ${t.teamLabel || '전체 참석자'} · ${t.formation}`, 24, 76);
 
     const oy = HEAD;
     // 잔디
@@ -389,7 +407,7 @@ export function initTactics(ctx) {
     t.pins.forEach((p, i) => {
       const px = sx(p.x); const py = oy + (p.y / 100) * PH;
       x.beginPath(); x.arc(px, py, 20, 0, Math.PI * 2);
-      x.fillStyle = p.gk ? '#f2b705' : (t.teamIdx >= 0 ? TEAM_COLORS[t.teamIdx] : '#1f7a4d');
+      x.fillStyle = p.gk ? '#f2b705' : (t.teamColor || '#1f7a4d');
       x.fill();
       x.lineWidth = 3; x.strokeStyle = 'rgba(255,255,255,.9)'; x.stroke();
       x.fillStyle = '#fff'; x.font = '900 16px -apple-system, sans-serif'; x.textAlign = 'center';

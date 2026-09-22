@@ -1,5 +1,5 @@
 /* 코어 로직 테스트 (node dev/test-core.mjs) — 브라우저 없이 검증 */
-import { balanceTeams, suggestTeamCount, teamSizeCaps } from '../balance.js';
+import { balanceTeams, suggestTeamCount, teamSizeCaps, suggestMerges, suggestGroupCount, groupStat, teamShortage } from '../balance.js';
 
 let pass = 0; let fail = 0;
 function ok(name, cond, extra = '') {
@@ -104,6 +104,88 @@ console.log('\n[3] 전술 저장');
   ok('전술 byId 조회', store.tactics.byId(t1.id)?.title === '수정본');
   store.tactics.remove(t1.id);
   ok('전술 삭제', store.tactics.byMatch(g.id).length === 0);
+}
+
+console.log('\n[4] 고정 4팀 · 합치기 제안 (v0.3.0)');
+{
+  // 4팀 소속 30명 중 18명 참석 시나리오
+  const s4 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s4.init();
+  const TEAMS = ['A', 'B', 'C', 'D'];
+  for (let i = 0; i < 30; i += 1) {
+    s4.members.add({ name: '회원' + i, skill: 1 + ((i * 7) % 5), gk: i % 7 === 0, pos: ['FW', 'MF', 'DF'][i % 3], team: TEAMS[i % 4] });
+  }
+  ok('회원 30명 4팀 소속', TEAMS.every((k) => s4.members.byTeam(k).length > 0),
+    TEAMS.map((k) => k + s4.members.byTeam(k).length).join(' '));
+
+  const gm = s4.matches.add({ date: '2026-09-24', place: '시민운동장', teamCount: 3 });
+  const all30 = s4.members.active();
+  // 팀별로 들쭉날쭉한 참석: A6 B3 C5 D4 = 18명
+  const plan = { A: 6, B: 3, C: 5, D: 4 };
+  for (const k of TEAMS) {
+    s4.members.byTeam(k).slice(0, plan[k]).forEach((m) => s4.matches.setAttendance(gm.id, m.id, 'in'));
+  }
+  ok('참석 18명 (A6·B3·C5·D4)', s4.matches.attendees(gm.id).length === 18);
+
+  const att = s4.matches.teamAttendance(gm.id);
+  ok('팀별 참석 집계', TEAMS.map((k) => att[k].length).join('/') === '6/3/5/4', TEAMS.map((k) => att[k].length).join('/'));
+  ok('미배정 0명', att.none.length === 0);
+
+  const short = teamShortage(groupStat(att.B));
+  ok('부족 팀 감지 (B 3명)', short.includes('인원 부족'), short.join(','));
+
+  const byTeam = {}; for (const k of TEAMS) byTeam[k] = att[k];
+  const sug3 = suggestMerges(byTeam, 3);
+  ok('3팀 합치기 후보 6개 (4팀→3묶음)', sug3.length === 6, sug3.length + '개');
+  const best = sug3[0];
+  ok('추천안 = 3묶음·전원 포함', best.groups.length === 3
+    && best.groups.flat().sort().join('') === 'ABCD'
+    && best.stats.reduce((a, x) => a + x.size, 0) === 18,
+    best.groups.map((g) => g.join('+')).join(' / ') + ' 전력 ' + best.stats.map((x) => x.total).join('/'));
+  ok('추천안이 최저 점수', sug3.every((x) => x.score >= best.score));
+  ok('추천안 = 후보 중 전력 편차 최소', best.spread === Math.min(...sug3.map((x) => x.spread)),
+    '추천 차 ' + best.spread + ' / 후보 차 ' + sug3.map((x) => x.spread).join(','));
+  ok('추천안 GK 모든 팀 보유 · 인원 편차 ≤ 2', best.gkMissing === 0 && best.sizeSpread <= 2,
+    'GK ' + best.stats.map((x) => x.gk).join('/') + ' 인원 ' + best.stats.map((x) => x.size).join('/'));
+
+  const sug2 = suggestMerges(byTeam, 2);
+  ok('2팀 합치기 후보 7개', sug2.length === 7, sug2.length + '개');
+  ok('2팀 추천안 전원 포함', sug2[0].stats.reduce((a, x) => a + x.size, 0) === 18);
+
+  const sug4 = suggestMerges(byTeam, 4);
+  ok('4팀 유지 = 합치기 없음', sug4.length === 1 && sug4[0].groups.every((g) => g.length === 1));
+
+  ok('권장 팀 수 (18명·4팀)', suggestGroupCount(18, 4) === 3 && suggestGroupCount(12, 4) === 2 && suggestGroupCount(26, 4) === 4);
+
+  // 한 팀만 참석 → 제안은 그 팀 하나
+  ok('참석 팀 1개면 묶음도 1개', suggestMerges({ A: att.A }, 3)[0].groups.length === 1);
+
+  // 채택 → 저장 → JSON 왕복
+  s4.matches.setTeams(gm.id, best.players.map((list) => list.map((p) => p.id)), 3,
+    { mode: 'merge', groups: best.groups });
+  const saved = s4.matches.byId(gm.id);
+  ok('확정 저장 (teams + teamPlan)', saved.teams.flat().length === 18 && saved.teamPlan.mode === 'merge'
+    && saved.teamPlan.groups.length === 3);
+
+  const json2 = s4.exportJSON();
+  const s5 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s5.init();
+  await s5.importJSON(json2);
+  const g5 = s5.matches.all()[0];
+  ok('JSON 왕복 — 소속 팀 보존', s5.members.byTeam('A').length === s4.members.byTeam('A').length);
+  ok('JSON 왕복 — 오늘의 팀·합치기 보존', g5.teams.flat().length === 18 && g5.teamPlan.groups.length === 3);
+  ok('JSON 왕복 — 팀 이름 보존', s5.club.teamName('A') === s4.club.teamName('A'));
+
+  // 마이그레이션: team 없는 옛 데이터
+  const s6 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s6.init();
+  await s6.importJSON(JSON.stringify({ members: [{ id: 'x1', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
+  ok('마이그레이션 — team 없으면 미배정', s6.members.all()[0].team === null);
+  ok('마이그레이션 — 팀 이름 기본값', s6.club.teamName('D') === 'D팀');
+
+  // 팀 이름 변경
+  s4.club.setTeamName('A', '레드');
+  ok('팀 이름 변경', s4.club.teamName('A') === '레드');
 }
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);

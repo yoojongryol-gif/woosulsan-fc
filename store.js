@@ -4,12 +4,16 @@
  * 모든 메서드는 async — 원격 저장소로 바꿔도 호출부가 안 바뀌게.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+/** 고정 소속 팀 키 (회원은 이 중 하나에 소속되거나 미배정) */
+export const TEAM_KEYS = ['A', 'B', 'C', 'D'];
+export const DEFAULT_TEAM_NAMES = { A: 'A팀', B: 'B팀', C: 'C팀', D: 'D팀' };
 
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
-    club: { name: '웃을산 FC' },
+    club: { name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES } },
     members: [],
     matches: [],
     tactics: [],
@@ -77,6 +81,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     const s = Object.assign(base, raw || {});
     s.schema = SCHEMA_VERSION;
     s.club = Object.assign({ name: '웃을산 FC' }, raw?.club || {});
+    s.club.teamNames = Object.assign({ ...DEFAULT_TEAM_NAMES }, raw?.club?.teamNames || {});
     s.members = Array.isArray(s.members) ? s.members.map(normalizeMember) : [];
     s.matches = Array.isArray(s.matches) ? s.matches.map(normalizeMatch) : [];
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
@@ -90,6 +95,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       skill: clampSkill(m.skill),
       gk: !!m.gk,
       pos: ['FW', 'MF', 'DF', 'GK'].includes(m.pos) ? m.pos : 'MF',
+      team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       active: m.active !== false,
       createdAt: m.createdAt || new Date().toISOString(),
     };
@@ -102,8 +108,12 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       time: x.time || '20:00',
       place: x.place || '',
       status: ['예정', '확정', '종료'].includes(x.status) ? x.status : '예정',
-      teamCount: x.teamCount === 3 ? 3 : 2,
+      teamCount: [2, 3, 4].includes(x.teamCount) ? x.teamCount : 2,
       teams: Array.isArray(x.teams) ? x.teams : [],
+      // 오늘의 팀 구성 방식: 고정 팀 합치기(merge) 또는 소속 무시 재배분(shuffle)
+      teamPlan: x.teamPlan && typeof x.teamPlan === 'object'
+        ? { mode: x.teamPlan.mode === 'shuffle' ? 'shuffle' : 'merge', groups: Array.isArray(x.teamPlan.groups) ? x.teamPlan.groups : [] }
+        : null,
       attendance: x.attendance && typeof x.attendance === 'object' ? x.attendance : {},
       createdAt: x.createdAt || new Date().toISOString(),
     };
@@ -138,20 +148,22 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         touch();
         return m;
       },
-      bulkAdd(names) {
+      bulkAdd(names, defaults = {}) {
         const added = [];
         const seen = new Set(state.members.map((m) => m.name));
         for (const raw of names) {
           const name = String(raw).trim();
           if (!name || seen.has(name)) continue;
           seen.add(name);
-          const m = normalizeMember({ name });
+          const m = normalizeMember({ ...defaults, name });
           state.members.push(m);
           added.push(m);
         }
         touch();
         return added;
       },
+      byTeam(key) { return state.members.filter((m) => m.active && m.team === key); },
+      unassigned() { return state.members.filter((m) => m.active && !m.team); },
       update(id, patch) {
         const i = state.members.findIndex((m) => m.id === id);
         if (i < 0) return null;
@@ -224,13 +236,27 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         if (!g) return [];
         return state.members.filter((m) => g.attendance[m.id] === 'in');
       },
-      setTeams(matchId, teams, teamCount) {
+      setTeams(matchId, teams, teamCount, teamPlan) {
         const g = api.matches.byId(matchId);
         if (!g) return null;
         g.teams = teams;
         if (teamCount) g.teamCount = teamCount;
+        if (teamPlan !== undefined) g.teamPlan = teamPlan;
         touch();
         return g;
+      },
+      /** 이번 경기의 소속 팀별 참석 현황 */
+      teamAttendance(matchId) {
+        const g = api.matches.byId(matchId);
+        const out = {};
+        for (const k of TEAM_KEYS) out[k] = [];
+        out.none = [];
+        if (!g) return out;
+        for (const m of state.members) {
+          if (!m.active || g.attendance[m.id] !== 'in') continue;
+          (out[m.team] || out.none).push(m);
+        }
+        return out;
       },
     },
 
@@ -267,6 +293,17 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       },
       remove(id) {
         state.tactics = state.tactics.filter((t) => t.id !== id);
+        touch();
+      },
+    },
+
+    /* 클럽 설정 (팀 이름) */
+    club: {
+      get() { return state.club; },
+      teamName(key) { return state.club.teamNames?.[key] || DEFAULT_TEAM_NAMES[key] || key; },
+      setTeamName(key, name) {
+        if (!TEAM_KEYS.includes(key)) return;
+        state.club.teamNames = Object.assign({ ...DEFAULT_TEAM_NAMES }, state.club.teamNames, { [key]: String(name).trim() || DEFAULT_TEAM_NAMES[key] });
         touch();
       },
     },

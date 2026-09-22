@@ -1,10 +1,11 @@
 /* 웃을산 FC — 앱 본체 */
-import { createStore, LocalStorageAdapter, uid } from './store.js';
-import { balanceTeams, suggestTeamCount, statsOf, spreadOf } from './balance.js';
+import { createStore, LocalStorageAdapter, TEAM_KEYS } from './store.js';
+import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 
-export const APP_VERSION = 'v0.2.2';
-const TEAM_NAMES = ['A팀', 'B팀', 'C팀'];
-const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a'];
+export const APP_VERSION = 'v0.3.0';
+/** 고정 소속 팀 A~D 색 */
+const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
+export { TEAM_KEYS };
 
 const store = createStore(new LocalStorageAdapter());
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -14,10 +15,13 @@ const ui = {
   tab: 'home',
   attendMatchId: null,
   teamMatchId: null,
-  teamDraft: null,      // [[memberId,...], ...]
+  teamPlan: null,       // {matchId, mode:'merge'|'shuffle', groups:[['A','B'],...], teams:[[id,...],...]}
+  groupCount: null,     // 사용자가 고른 오늘 팀 수
   teamSel: null,        // {t, i} 스왑 선택
   memberQuery: '',
+  memberTeam: 'all',    // 회원 탭 팀 필터
   showInactive: false,
+  _suggestions: [],
 };
 
 /* ================= 유틸 ================= */
@@ -44,6 +48,11 @@ function stars(n) {
   return `<span class="stars">${out}</span>`;
 }
 function initial(name) { return String(name || '?').trim().slice(-2); }
+function teamDot(key) {
+  const i = TEAM_KEYS.indexOf(key);
+  if (i < 0) return '<span class="tbadge none">미배정</span>';
+  return `<span class="tbadge" style="--c:${TEAM_COLORS[i]}">${esc(store.club.teamName(key))}</span>`;
+}
 
 let toastTimer;
 function toast(msg, kind = '') {
@@ -154,8 +163,13 @@ function renderHome() {
       <div class="place">${next.place ? esc(next.place) : '장소 미정'}</div>
       <div class="meta">
         <span class="pill">참석 ${att} / 전체 ${members.length}</span>
-        <span class="pill">${next.teamCount}팀</span>
         <span class="pill">${esc(next.status)}</span>
+      </div>
+      <div class="teamline">
+        ${TEAM_KEYS.map((k) => {
+          const n = store.matches.teamAttendance(next.id)[k].length;
+          return `<span class="tcell"><b>${esc(store.club.teamName(k))}</b><i>${n}</i></span>`;
+        }).join('')}
       </div>
       <div class="actions">
         <button class="btn solid" data-go="attend" data-match="${next.id}">출석 체크</button>
@@ -270,7 +284,7 @@ function attItem(m, v) {
     <div class="avatar">${esc(initial(m.name))}</div>
     <div class="nm">
       <b>${esc(m.name)}</b>
-      <div class="sub">${stars(m.skill)}${m.gk ? '<span class="chip gk">GK</span>' : ''}${st.rate != null ? `<span class="rate-mini">${st.rate}%</span>` : ''}</div>
+      <div class="sub">${teamDot(m.team)}${stars(m.skill)}${m.gk ? '<span class="chip gk">GK</span>' : ''}${st.rate != null ? `<span class="rate-mini">${st.rate}%</span>` : ''}</div>
     </div>
     <div class="seg" data-member="${m.id}">
       <button class="in" data-v="in" aria-pressed="${v === 'in'}">참석</button>
@@ -290,6 +304,37 @@ function emptyMatches(msg) {
 }
 
 /* ---------- 팀 ---------- */
+function teamName(k) { return k === 'none' ? '미배정' : store.club.teamName(k); }
+function groupLabel(group, i, mode) {
+  if (mode === 'shuffle' || !group || !group.length) return `${i + 1}조`;
+  return group.map(teamName).join(' + ');
+}
+function groupColor(group, i, mode) {
+  if (mode === 'shuffle' || !group || !group.length) return TEAM_COLORS[i % TEAM_COLORS.length];
+  const idx = TEAM_KEYS.indexOf(group[0]);
+  return idx >= 0 ? TEAM_COLORS[idx] : TEAM_COLORS[i % TEAM_COLORS.length];
+}
+
+/** 이번 경기의 오늘 팀 구성(초안). 없으면 저장된 구성, 그것도 없으면 null */
+function currentPlan(g) {
+  if (ui.teamPlan && ui.teamPlan.matchId === g.id) return ui.teamPlan;
+  if (g.teams && g.teams.length) {
+    return {
+      matchId: g.id,
+      mode: g.teamPlan?.mode || 'merge',
+      groups: g.teamPlan?.groups || [],
+      teams: g.teams.map((ids) => [...ids]),
+    };
+  }
+  return null;
+}
+
+function applyPlan(plan) {
+  ui.teamPlan = plan;
+  ui.teamSel = null;
+  renderTeam();
+}
+
 function renderTeam() {
   const root = $('#view-team');
   const matches = store.matches.sorted();
@@ -298,73 +343,159 @@ function renderTeam() {
     ui.teamMatchId = (store.matches.upcoming()[0] || matches[0]).id;
   }
   const g = store.matches.byId(ui.teamMatchId);
-  const attendees = store.matches.attendees(g.id);
-  const sug = suggestTeamCount(attendees.length);
+  const att = store.matches.teamAttendance(g.id);
+  const total = TEAM_KEYS.reduce((n, k) => n + att[k].length, 0) + att.none.length;
 
-  let html = `
-    <div class="selectrow"><select id="team-match">${matchOptions(matches, g.id)}</select></div>
-    <div class="card flat" style="padding:12px">
-      <div class="row" style="align-items:center;margin-bottom:10px">
-        <div style="font-weight:800">참석 ${attendees.length}명</div>
-        <div class="spacer" style="flex:1"></div>
-        <div style="font-size:12px;color:var(--text-3);font-weight:700">권장 ${sug}팀</div>
-      </div>
-      <div class="seg-wide" id="team-count">
-        <button data-tc="2" aria-pressed="${g.teamCount === 2}">2팀</button>
-        <button data-tc="3" aria-pressed="${g.teamCount === 3}">3팀</button>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button class="btn primary grow" id="btn-balance">${ICON.shuffle} 자동 팀 나누기</button>
-      </div>
+  let html = `<div class="selectrow"><select id="team-match">${matchOptions(matches, g.id)}</select></div>`;
+
+  /* 1) 팀별 참석 현황 */
+  html += `<div class="section-title">팀별 참석 현황 <span class="count">참석 ${total}명</span>
+    <button class="btn sm ghost right" id="btn-team-names">팀 이름</button></div>`;
+  html += '<div class="team-grid">';
+  html += TEAM_KEYS.map((k, i) => {
+    const list = att[k];
+    const s = groupStat(list);
+    const short = list.length ? teamShortage(s) : ['참석 없음'];
+    return `<div class="tstat" style="--c:${TEAM_COLORS[i]}">
+      <div class="hd"><span class="dot"></span><b>${esc(teamName(k))}</b><span class="n">${list.length}명</span></div>
+      <div class="meta">전력 ${s.total} · 평균 ${s.avg || 0}</div>
+      <div class="meta">GK ${s.gk} · FW ${s.pos.FW} · MF ${s.pos.MF} · DF ${s.pos.DF}</div>
+      ${short.length ? `<div class="warnline">${short.map((r) => `<span class="chip warn">${r}</span>`).join(' ')}</div>`
+        : '<div class="okline">경기 가능</div>'}
     </div>`;
+  }).join('');
+  html += '</div>';
+  if (att.none.length) {
+    html += `<div class="card flat" style="padding:10px 12px;margin-top:8px">
+      <span class="chip warn">미배정 ${att.none.length}명</span>
+      <span style="font-size:12.5px;color:var(--text-2);margin-left:6px">${esc(att.none.slice(0, 6).map((m) => m.name).join(', '))}${att.none.length > 6 ? ' 외' : ''} — 회원 탭에서 소속 팀을 정해 주세요.</span>
+    </div>`;
+  }
 
-  if (attendees.length < 2) {
-    html += `<div class="empty"><div class="big">참석자가 부족합니다</div>
+  if (total < 2) {
+    html += `<div class="empty" style="margin-top:12px"><div class="big">참석자가 부족합니다</div>
       <div>출석 탭에서 참석자를 먼저 체크해 주세요.</div>
       <button class="btn" style="margin-top:14px" data-go="attend" data-match="${g.id}">출석 탭으로</button></div>`;
     root.innerHTML = html;
     return;
   }
 
-  const draft = ui.teamDraft && ui.teamDraft.matchId === g.id ? ui.teamDraft.teams
-    : (g.teams && g.teams.length ? g.teams : null);
+  /* 2) 오늘 팀 수 + 합치기 제안 */
+  const byTeam = {};
+  for (const k of TEAM_KEYS) if (att[k].length) byTeam[k] = att[k];
+  if (att.none.length) byTeam.none = att.none;
+  const availableTeams = Object.keys(byTeam).length;
+  const plan = currentPlan(g);
+  const recommended = suggestGroupCount(total, availableTeams);
+  const wanted = ui.groupCount || (plan ? plan.teams.length : recommended);
+  const options = [2, 3, 4].filter((n) => n <= Math.max(2, availableTeams));
 
-  if (!draft) {
-    html += `<div class="empty"><div class="big">아직 팀을 나누지 않았습니다</div>
-      <div>위 버튼을 누르면 실력·GK·인원을 맞춰 자동으로 나눕니다.</div></div>`;
+  html += `<div class="section-title">오늘 팀 수 <span class="count">권장 ${recommended}팀</span></div>
+    <div class="seg-wide" id="group-count">
+      ${options.map((n) => `<button data-gc="${n}" aria-pressed="${wanted === n}">${n}팀</button>`).join('')}
+    </div>`;
+
+  const suggestions = availableTeams >= 2 ? suggestMerges(byTeam, Math.min(wanted, availableTeams)).slice(0, 3) : [];
+  ui._suggestions = suggestions;
+  if (suggestions.length) {
+    html += `<div class="section-title">합치기 제안 <span class="count">${suggestions.length}개</span></div>`;
+    html += suggestions.map((sg, i) => {
+      const labels = sg.groups.map((grp) => grp.map(teamName).join('+')).join(' / ');
+      return `<div class="sugg${i === 0 ? ' best' : ''}">
+        <div class="l">
+          <div class="t">${esc(labels)}${i === 0 ? '<span class="chip gk" style="margin-left:6px">추천</span>' : ''}</div>
+          <div class="s">전력 ${sg.stats.map((x) => x.total).join('/')} · 인원 ${sg.stats.map((x) => x.size).join('/')} · GK ${sg.stats.map((x) => x.gk).join('/')}</div>
+        </div>
+        <button class="btn sm primary" data-adopt="${i}">채택</button>
+      </div>`;
+    }).join('');
   } else {
-    const teams = draft.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
-    const st = statsOf(teams);
-    const sp = spreadOf(teams);
-    html += `<div class="section-title">팀 구성 <span class="right">전력 차 ${sp}</span></div>`;
-    html += teams.map((t, i) => `
-      <div class="team-card" data-t="${i}">
-        <div class="hd">
-          <span class="t">${TEAM_NAMES[i]}</span>
-          <span class="r">${t.length}명 · 전력 ${st[i].total} · 평균 ${st[i].avg}${st[i].gk ? ' · GK ' + st[i].gk : ''}</span>
-        </div>
-        <div class="bd">
-          ${t.map((p, j) => `<button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}" data-swap="${i}:${j}">
-            ${p.gk ? '<span class="gkb">GK</span>' : ''}
-            <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
-          </button>`).join('')}
-        </div>
-      </div>`).join('');
-    if (st.some((s) => s.gk === 0)) {
-      html += `<div class="card flat" style="padding:10px 12px"><span class="chip warn">GK 없는 팀 있음</span>
-        <span style="font-size:12.5px;color:var(--text-2);margin-left:6px">회원 탭에서 GK를 지정하면 팀당 1명씩 나눠 배치됩니다.</span></div>`;
-    }
-    html += `<div class="row wrap" style="margin-top:4px">
-      <button class="btn grow" id="btn-reshuffle">${ICON.shuffle} 다시 섞기</button>
+    html += `<div class="card flat" style="padding:12px"><div style="font-size:13px;color:var(--text-2)">
+      참석한 소속 팀이 하나뿐입니다. 아래 "완전 새로 섞기"로 나누세요.</div></div>`;
+  }
+  html += `<div class="row" style="margin-top:8px">
+    <button class="btn block grow" id="btn-shuffle-all">${ICON.shuffle} 소속 무시하고 완전 새로 섞기</button>
+  </div>`;
+
+  /* 3) 오늘의 최종 구성 */
+  if (!plan) {
+    html += `<div class="empty" style="margin-top:14px"><div class="big">오늘 팀이 아직 없습니다</div>
+      <div>위 제안을 "채택"하거나 "완전 새로 섞기"를 누르세요.</div></div>`;
+    root.innerHTML = html;
+    return;
+  }
+
+  const teams = plan.teams.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
+  const st = teams.map(groupStat);
+  const totals = st.map((x) => x.total);
+  const sp = Math.max(...totals) - Math.min(...totals);
+  html += `<div class="section-title">오늘의 팀 <span class="right">전력 차 ${sp}</span></div>`;
+  html += teams.map((t, i) => {
+    const color = groupColor(plan.groups[i], i, plan.mode);
+    return `<div class="team-card">
+      <div class="hd" style="background:${color}">
+        <span class="t">${esc(groupLabel(plan.groups[i], i, plan.mode))}</span>
+        <span class="r">${t.length}명 · 전력 ${st[i].total} · GK ${st[i].gk}</span>
+      </div>
+      <div class="bd">
+        ${t.map((p, j) => `<button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}" data-swap="${i}:${j}">
+          ${p.gk ? '<span class="gkb">GK</span>' : ''}
+          <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
+        </button>`).join('')}
+      </div>
+      <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}</div>
+    </div>`;
+  }).join('');
+  html += `<div class="row wrap" style="margin-top:4px">
+      <button class="btn grow" id="btn-reshuffle">${ICON.shuffle} 이 구성 다시 섞기</button>
       <button class="btn grow primary" id="btn-save-teams">팀 확정 저장</button>
     </div>
     <div class="row" style="margin-top:8px">
       <button class="btn block grow" id="btn-team-png">${ICON.image} 공유용 이미지 저장</button>
     </div>
-    <div class="swap-hint">${ui.teamSel ? '바꿀 상대 선수를 탭하세요' : '선수 카드를 탭 → 다른 선수 탭 = 자리 교체'}</div>`;
-  }
+    ${ui.teamSel
+      ? '<div class="swap-hint">바꿀 상대 선수를 탭하세요</div>'
+      : '<div class="footer-note">선수 카드를 탭 → 다른 선수 탭 = 자리 교체</div>'}`;
+
   root.innerHTML = html;
 }
+
+/** 제안 채택 → 오늘의 팀 구성 */
+function adoptSuggestion(idx) {
+  const g = store.matches.byId(ui.teamMatchId);
+  const sg = ui._suggestions?.[idx];
+  if (!g || !sg) return;
+  applyPlan({
+    matchId: g.id,
+    mode: 'merge',
+    groups: sg.groups.map((grp) => [...grp]),
+    teams: sg.players.map((list) => list.map((p) => p.id)),
+  });
+  toast(`채택 · 전력 ${sg.stats.map((x) => x.total).join('/')} (차 ${sg.spread})`);
+}
+
+/** 팀 이름 편집 */
+function teamNameModal() {
+  openModal(`
+    <h3>팀 이름</h3>
+    <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">고정 소속 팀 4개의 이름입니다. 회원은 이 중 한 팀에 속합니다.</div>
+    ${TEAM_KEYS.map((k) => `<div class="field"><label>${k}</label><input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12"></div>`).join('')}
+    <div class="foot">
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
+      closeModal();
+      toast('팀 이름을 저장했습니다');
+      render();
+    });
+  });
+}
+
 
 /* ---------- 회원 ---------- */
 function renderMembers() {
@@ -374,7 +505,10 @@ function renderMembers() {
   const list = all
     .filter((m) => (ui.showInactive ? true : m.active))
     .filter((m) => !q || m.name.includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    .filter((m) => ui.memberTeam === 'all' || (ui.memberTeam === 'none' ? !m.team : m.team === ui.memberTeam))
+    .sort((a, b) => (a.team || 'Z').localeCompare(b.team || 'Z') || a.name.localeCompare(b.name, 'ko'));
+  const counts = { none: all.filter((m) => m.active && !m.team).length };
+  for (const k of TEAM_KEYS) counts[k] = all.filter((m) => m.active && m.team === k).length;
 
   let html = `
     <div class="row" style="margin-bottom:10px">
@@ -382,6 +516,11 @@ function renderMembers() {
       <button class="btn grow" id="btn-bulk-member">일괄 추가</button>
     </div>
     <div class="search-wrap">${ICON.search}<input id="member-q" type="search" placeholder="이름 검색" value="${esc(q)}"></div>
+    <div class="teamfilter">
+      <button data-mt="all" aria-pressed="${ui.memberTeam === 'all'}">전체 ${all.filter((m) => m.active).length}</button>
+      ${TEAM_KEYS.map((k, i) => `<button data-mt="${k}" aria-pressed="${ui.memberTeam === k}" style="--c:${TEAM_COLORS[i]}"><span class="dot"></span>${esc(store.club.teamName(k))} ${counts[k]}</button>`).join('')}
+      <button data-mt="none" aria-pressed="${ui.memberTeam === 'none'}">미배정 ${counts.none}</button>
+    </div>
     <div class="section-title">회원 <span class="count">${list.length}${all.length !== list.length ? ` / ${all.length}` : ''}</span>
       <button class="btn sm ghost right" id="btn-toggle-inactive">${ui.showInactive ? '활동 회원만' : '비활동 포함'}</button>
     </div>`;
@@ -395,7 +534,7 @@ function renderMembers() {
       return `<button class="mem-item${m.active ? '' : ' off'}" data-member-edit="${m.id}">
         <div class="avatar">${esc(initial(m.name))}</div>
         <div class="nm"><b>${esc(m.name)}${m.active ? '' : ' <span class="chip">비활동</span>'}</b>
-          <div class="sub">${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}</div>
+          <div class="sub">${teamDot(m.team)}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}</div>
         </div>
         <div class="rate">${st.rate != null ? st.rate + '%' : '–'}<small>${st.present}/${st.total}회</small></div>
       </button>`;
@@ -409,6 +548,7 @@ function renderMembers() {
         <button class="btn grow" id="btn-export">JSON 내보내기</button>
         <button class="btn grow" id="btn-import">JSON 가져오기</button>
       </div>
+      <button class="btn block" id="btn-team-names-2" style="margin-bottom:8px">팀 이름 바꾸기</button>
       <input type="file" id="file-import" accept="application/json,.json" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
         데이터는 이 기기(브라우저)에만 저장됩니다. 기기를 바꾸거나 백업하려면 JSON으로 내보내 두세요.
@@ -499,7 +639,7 @@ function matchModal(existing) {
 }
 
 function memberModal(existing) {
-  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', active: true };
+  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', team: null, active: true };
   openModal(`
     <h3>${existing ? '회원 수정' : '회원 추가'}</h3>
     <div class="field"><label>이름</label><input type="text" id="f-name" value="${esc(m0.name)}" placeholder="이름" autocomplete="off"></div>
@@ -509,6 +649,12 @@ function memberModal(existing) {
     <div class="field"><label>선호 포지션</label>
       <div class="seg-wide" id="f-pos">${['FW', 'MF', 'DF', 'GK'].map((p) => `<button type="button" data-p="${p}" aria-pressed="${m0.pos === p}">${p}</button>`).join('')}</div>
     </div>
+    <div class="field"><label>소속 팀</label>
+      <div class="seg-wide" id="f-team">
+        ${TEAM_KEYS.map((k) => `<button type="button" data-tk="${k}" aria-pressed="${m0.team === k}">${esc(store.club.teamName(k))}</button>`).join('')}
+        <button type="button" data-tk="" aria-pressed="${!m0.team}">미배정</button>
+      </div>
+    </div>
     <div class="togglerow"><label for="f-gk">골키퍼 가능</label><button type="button" class="switch" id="f-gk" aria-pressed="${!!m0.gk}"></button></div>
     <div class="togglerow"><label for="f-active">활동 중</label><button type="button" class="switch" id="f-active" aria-pressed="${m0.active !== false}"></button></div>
     <div class="foot">
@@ -516,10 +662,16 @@ function memberModal(existing) {
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
-    let skill = m0.skill; let pos = m0.pos;
+    let skill = m0.skill; let pos = m0.pos; let team = m0.team || null;
     m.addEventListener('click', async (e) => {
       const sb = e.target.closest('#f-skill [data-s]');
       if (sb) { skill = Number(sb.dataset.s); $$('#f-skill [data-s]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === sb))); return; }
+      const tb = e.target.closest('#f-team [data-tk]');
+      if (tb) {
+        team = tb.dataset.tk || null;
+        $$('#f-team [data-tk]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === tb)));
+        return;
+      }
       const pb = e.target.closest('#f-pos [data-p]');
       if (pb) {
         pos = pb.dataset.p;
@@ -542,7 +694,7 @@ function memberModal(existing) {
       }
       const name = $('#f-name', m).value.trim();
       if (!name) { toast('이름을 입력해 주세요', 'err'); return; }
-      const data = { name, skill, pos, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
+      const data = { name, skill, pos, team, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
       if (existing) { store.members.update(existing.id, data); toast('수정했습니다'); }
       else { store.members.add(data); toast(`${name} 님 추가`); }
       closeModal(); render();
@@ -551,23 +703,36 @@ function memberModal(existing) {
 }
 
 function bulkModal() {
+  let bteam = null;
   openModal(`
     <h3>회원 일괄 추가</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
       이름을 한 줄에 하나씩 붙여넣으세요. 이미 있는 이름은 건너뜁니다.<br>실력은 기본 3, GK는 나중에 회원 수정에서 지정합니다.
     </div>
-    <textarea id="f-bulk" rows="9" placeholder="홍길동&#10;김철수&#10;이영희"></textarea>
+    <textarea id="f-bulk" rows="8" placeholder="홍길동&#10;김철수&#10;이영희"></textarea>
+    <div class="field" style="margin-top:12px"><label>소속 팀 (모두 같은 팀으로)</label>
+      <div class="seg-wide" id="f-bteam">
+        ${TEAM_KEYS.map((k) => `<button type="button" data-tk="${k}">${esc(store.club.teamName(k))}</button>`).join('')}
+        <button type="button" data-tk="" aria-pressed="true">미배정</button>
+      </div>
+    </div>
     <div class="foot">
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">추가</button>
     </div>`, (m) => {
     m.addEventListener('click', (e) => {
+      const tb = e.target.closest('#f-bteam [data-tk]');
+      if (tb) {
+        bteam = tb.dataset.tk || null;
+        $$('#f-bteam [data-tk]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === tb)));
+        return;
+      }
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'cancel') return closeModal();
       const names = $('#f-bulk', m).value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
       if (!names.length) { toast('이름이 없습니다', 'err'); return; }
-      const added = store.members.bulkAdd(names);
+      const added = store.members.bulkAdd(names, { team: bteam });
       closeModal();
       toast(`${added.length}명 추가 (중복 ${names.length - added.length}명 제외)`);
       render();
@@ -576,21 +741,42 @@ function bulkModal() {
 }
 
 /* ---------- 팀 배분 ---------- */
-function doBalance(reshuffle = false) {
+/** 소속을 무시하고 참석자 전체를 새로 섞는다 (mode: shuffle) */
+function doShuffleAll(reshuffle = false) {
   const g = store.matches.byId(ui.teamMatchId);
   if (!g) return;
   const attendees = store.matches.attendees(g.id);
   if (attendees.length < 2) { toast('참석자가 2명 이상이어야 합니다', 'err'); return; }
-  const res = balanceTeams(attendees, g.teamCount, {});
-  ui.teamDraft = { matchId: g.id, teams: res.teams.map((t) => t.map((p) => p.id)) };
-  ui.teamSel = null;
-  renderTeam();
-  toast(reshuffle ? `다시 섞었습니다 (전력 차 ${res.spread})` : `${g.teamCount}팀 배분 완료 (전력 차 ${res.spread})`);
+  const plan = currentPlan(g);
+  const n = ui.groupCount || plan?.teams.length || suggestGroupCount(attendees.length, 4);
+  const res = balanceTeams(attendees, n, {});
+  applyPlan({
+    matchId: g.id, mode: 'shuffle', groups: [],
+    teams: res.teams.map((t) => t.map((p) => p.id)),
+  });
+  toast(reshuffle ? `다시 섞었습니다 (전력 차 ${res.spread})` : `소속 무시 ${n}팀 (전력 차 ${res.spread})`);
+}
+
+/** 지금 구성을 유지한 채 다시 섞기: merge 면 같은 제안 재적용, shuffle 이면 재배분 */
+function doReshuffle() {
+  const g = store.matches.byId(ui.teamMatchId);
+  const plan = currentPlan(g);
+  if (!plan) return;
+  if (plan.mode === 'shuffle') return doShuffleAll(true);
+  const att = store.matches.teamAttendance(g.id);
+  const pool = {};
+  for (const k of [...TEAM_KEYS, 'none']) if (att[k].length) pool[k] = att[k];
+  const teams = plan.groups.map((grp) => grp.flatMap((k) => (pool[k] || []).map((m) => m.id)));
+  applyPlan({ ...plan, teams });
+  toast('소속 기준으로 되돌렸습니다');
 }
 
 function handleSwap(t, i) {
-  if (!ui.teamDraft) return;
-  const teams = ui.teamDraft.teams;
+  const g = store.matches.byId(ui.teamMatchId);
+  const plan = currentPlan(g);
+  if (!plan) return;
+  ui.teamPlan = plan;
+  const teams = plan.teams;
   if (!ui.teamSel) { ui.teamSel = { t, i }; renderTeam(); return; }
   const a = ui.teamSel;
   if (a.t === t && a.i === i) { ui.teamSel = null; renderTeam(); return; }
@@ -605,10 +791,12 @@ function handleSwap(t, i) {
 /* ---------- 팀 이미지 ---------- */
 async function exportTeamsPNG() {
   const g = store.matches.byId(ui.teamMatchId);
-  const draft = ui.teamDraft?.matchId === g.id ? ui.teamDraft.teams : g.teams;
-  if (!draft?.length) { toast('먼저 팀을 나눠 주세요', 'err'); return; }
-  const teams = draft.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
-  const st = statsOf(teams);
+  const plan = currentPlan(g);
+  if (!plan?.teams?.length) { toast('먼저 팀을 나눠 주세요', 'err'); return; }
+  const teams = plan.teams.map((ids) => ids.map((id) => store.members.byId(id)).filter(Boolean));
+  const st = teams.map(groupStat);
+  const labels = teams.map((_, i) => groupLabel(plan.groups[i], i, plan.mode));
+  const colors = teams.map((_, i) => groupColor(plan.groups[i], i, plan.mode));
   const maxRows = Math.max(...teams.map((t) => t.length));
   const W = 1080;
   const headH = 210;
@@ -633,11 +821,11 @@ async function exportTeamsPNG() {
   teams.forEach((t, i) => {
     x.fillStyle = '#fffdf9';
     roundRect(x, 40, y, W - 80, cardH, 22); x.fill();
-    x.fillStyle = TEAM_COLORS[i];
+    x.fillStyle = colors[i];
     roundRect(x, 40, y, W - 80, 66, 22); x.fill();
     x.fillStyle = '#fff';
     x.font = '900 32px -apple-system, Malgun Gothic, sans-serif';
-    x.fillText(TEAM_NAMES[i], 76, y + 44);
+    x.fillText(labels[i], 76, y + 44);
     x.font = '800 24px -apple-system, Malgun Gothic, sans-serif';
     const meta = `${t.length}명 · 전력 ${st[i].total} · 평균 ${st[i].avg}`;
     x.fillText(meta, W - 76 - x.measureText(meta).width, y + 43);
@@ -647,7 +835,7 @@ async function exportTeamsPNG() {
       x.font = '700 30px -apple-system, Malgun Gothic, sans-serif';
       x.fillText(`${j + 1}. ${p.name}`, 80, ry);
       if (p.gk) {
-        x.fillStyle = TEAM_COLORS[i];
+        x.fillStyle = colors[i];
         const w = x.measureText(`${j + 1}. ${p.name}`).width;
         roundRect(x, 92 + w, ry - 24, 52, 30, 8); x.fill();
         x.fillStyle = '#fff'; x.font = '900 18px -apple-system, sans-serif';
@@ -672,9 +860,13 @@ export async function shareOrDownload(file, blob) {
   try {
     if (navigator.canShare?.({ files: [file] })) {
       await navigator.share({ files: [file], title: file.name });
+      toast('공유했습니다');
       return;
     }
-  } catch (e) { /* 공유 취소 → 다운로드로 */ }
+  } catch (e) {
+    if (e?.name === 'AbortError') return; // 사용자가 공유를 취소함
+    /* 그 밖의 실패는 파일 저장으로 대체 */
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = file.name;
@@ -714,7 +906,7 @@ async function importJSONFile(file) {
   try {
     const r = await store.importJSON(text, { merge });
     toast(`가져오기 완료 · 회원 ${r.members}명 / 경기 ${r.matches}건`);
-    ui.teamDraft = null;
+    ui.teamPlan = null;
     render();
   } catch (e) {
     toast(e.message || '가져오기 실패', 'err');
@@ -757,7 +949,7 @@ function bindEvents() {
       const v = segb.dataset.v;
       const next = cur === v ? null : v;
       store.matches.setAttendance(ui.attendMatchId, memberId, next);
-      ui.teamDraft = null;
+      if (ui.teamPlan?.matchId === ui.attendMatchId) ui.teamPlan = null;
       // 전체 다시 그리면 스크롤이 튀므로 해당 줄 + 상단 카운트만 갱신
       $$('[data-v]', seg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === next)));
       updateAttendCounts();
@@ -776,21 +968,24 @@ function bindEvents() {
         store.matches.setAttendanceBulk(g.id, {});
         toast('초기화했습니다');
       }
-      ui.teamDraft = null;
+      ui.teamPlan = null;
       renderAttend(); renderTeam(); renderHome();
       return;
     }
 
     // 팀
-    const tc = t.closest('#team-count [data-tc]');
-    if (tc) {
-      store.matches.update(ui.teamMatchId, { teamCount: Number(tc.dataset.tc) });
-      ui.teamDraft = null;
+    const gc = t.closest('#group-count [data-gc]');
+    if (gc) {
+      ui.groupCount = Number(gc.dataset.gc);
+      ui.teamPlan = null;      // 팀 수가 바뀌면 구성은 다시 고른다
       renderTeam();
       return;
     }
-    if (t.closest('#btn-balance')) return doBalance(false);
-    if (t.closest('#btn-reshuffle')) return doBalance(true);
+    const ad = t.closest('[data-adopt]');
+    if (ad) return adoptSuggestion(Number(ad.dataset.adopt));
+    if (t.closest('#btn-shuffle-all')) return doShuffleAll(false);
+    if (t.closest('#btn-reshuffle')) return doReshuffle();
+    if (t.closest('#btn-team-names, #btn-team-names-2')) return teamNameModal();
     const sw = t.closest('[data-swap]');
     if (sw) {
       const [a, b] = sw.dataset.swap.split(':').map(Number);
@@ -798,8 +993,11 @@ function bindEvents() {
     }
     if (t.closest('#btn-save-teams')) {
       const g = store.matches.byId(ui.teamMatchId);
-      store.matches.setTeams(g.id, ui.teamDraft?.teams || g.teams, g.teamCount);
+      const plan = currentPlan(g);
+      if (!plan) { toast('먼저 팀을 만들어 주세요', 'err'); return; }
+      store.matches.setTeams(g.id, plan.teams, plan.teams.length, { mode: plan.mode, groups: plan.groups });
       store.matches.update(g.id, { status: g.status === '예정' ? '확정' : g.status });
+      ui.teamPlan = null;
       toast('팀을 확정 저장했습니다');
       render();
       return;
@@ -810,6 +1008,8 @@ function bindEvents() {
     if (t.closest('#btn-add-member')) return memberModal(null);
     if (t.closest('#btn-bulk-member')) return bulkModal();
     if (t.closest('#btn-toggle-inactive')) { ui.showInactive = !ui.showInactive; return renderMembers(); }
+    const mt = t.closest('.teamfilter [data-mt]');
+    if (mt) { ui.memberTeam = mt.dataset.mt; return renderMembers(); }
     const me = t.closest('[data-member-edit]');
     if (me) return memberModal(store.members.byId(me.dataset.memberEdit));
 
@@ -820,7 +1020,7 @@ function bindEvents() {
       if (!await confirmDialog({ title: '전체 데이터를 지울까요?', body: '회원·경기·출석·전술이 모두 삭제됩니다. 되돌릴 수 없습니다.', ok: '다음', danger: true })) return;
       if (!await confirmDialog({ title: '정말 삭제합니다', body: '먼저 JSON 내보내기로 백업했는지 확인하세요.', ok: '삭제', danger: true })) return;
       await store.resetAll();
-      ui.teamDraft = null; ui.attendMatchId = null; ui.teamMatchId = null;
+      ui.teamPlan = null; ui.attendMatchId = null; ui.teamMatchId = null;
       toast('초기화했습니다');
       render();
     }
@@ -828,7 +1028,7 @@ function bindEvents() {
 
   document.addEventListener('change', (e) => {
     if (e.target.id === 'att-match') { ui.attendMatchId = e.target.value; renderAttend(); }
-    if (e.target.id === 'team-match') { ui.teamMatchId = e.target.value; ui.teamDraft = null; ui.teamSel = null; renderTeam(); }
+    if (e.target.id === 'team-match') { ui.teamMatchId = e.target.value; ui.teamPlan = null; ui.groupCount = null; ui.teamSel = null; renderTeam(); }
     if (e.target.id === 'file-import' && e.target.files[0]) { importJSONFile(e.target.files[0]); e.target.value = ''; }
   });
 
@@ -901,7 +1101,8 @@ async function main() {
   window.addEventListener('beforeunload', () => store.flush());
   // 전술 모듈(2단계)
   import('./tactics.js')
-    .then((mod) => mod.initTactics({ store, ui, switchTab, toast, esc, openModal, closeModal, confirmDialog, shareOrDownload, fmtDate, TEAM_NAMES, TEAM_COLORS, APP_VERSION }))
+    .then((mod) => mod.initTactics({ store, ui, switchTab, toast, esc, openModal, closeModal, confirmDialog,
+      shareOrDownload, fmtDate, TEAM_KEYS, TEAM_COLORS, APP_VERSION, groupLabel, groupColor, currentPlan }))
     .catch((e) => {
       console.warn('[tactics] 준비 중', e);
       const v = $('#view-tactics');
@@ -909,5 +1110,5 @@ async function main() {
     });
 }
 
-window.__fc = { store, ui, render, balanceTeams, switchTab, APP_VERSION };
+window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adoptSuggestion, doShuffleAll, APP_VERSION, TEAM_KEYS };
 main();

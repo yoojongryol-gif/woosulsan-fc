@@ -139,3 +139,79 @@ export { statsOf, spreadOf };
 export function suggestTeamCount(n) {
   return n >= 15 ? 3 : 2;
 }
+
+/* ===================== 고정 4팀 → 합치기 제안 (v0.3.0) ===================== */
+
+/** 선수 배열의 요약 통계 */
+export function groupStat(players) {
+  return {
+    size: players.length,
+    total: players.reduce((a, p) => a + (Number(p.skill) || 0), 0),
+    avg: players.length ? Math.round((players.reduce((a, p) => a + (Number(p.skill) || 0), 0) / players.length) * 10) / 10 : 0,
+    gk: players.filter((p) => p.gk).length,
+    pos: ['FW', 'MF', 'DF'].reduce((o, k) => { o[k] = players.filter((p) => (p.pos || 'MF') === k).length; return o; }, {}),
+  };
+}
+
+/**
+ * 참석자가 있는 소속 팀들을 groupCount 개의 묶음으로 나누는 모든 경우를 만들고 점수화.
+ * 점수(낮을수록 좋음) = 전력합 편차*10 + 인원 편차*4 + GK 없는 묶음*25
+ * @param {Object} byTeam  { A: [players], B: [...], ... } — 참석자만
+ * @param {number} groupCount 2~4
+ * @returns {Array<{groups: string[][], stats, spread, sizeSpread, gkMissing, score}>} 점수 오름차순
+ */
+export function suggestMerges(byTeam, groupCount) {
+  const keys = Object.keys(byTeam).filter((k) => (byTeam[k] || []).length > 0);
+  const gc = Math.max(1, Math.min(keys.length, groupCount | 0));
+  const out = [];
+  const assign = new Array(keys.length).fill(0);
+
+  // 정규형(첫 등장 순서) 열거로 같은 분할의 순열 중복 제거
+  const walk = (i, used) => {
+    if (i === keys.length) {
+      if (used !== gc) return;
+      const groups = Array.from({ length: gc }, () => []);
+      keys.forEach((k, j) => groups[assign[j]].push(k));
+      out.push(evaluateGroups(groups, byTeam));
+      return;
+    }
+    for (let g = 0; g <= Math.min(used, gc - 1); g += 1) {
+      assign[i] = g;
+      walk(i + 1, g === used ? used + 1 : used);
+    }
+  };
+  walk(0, 0);
+
+  out.sort((a, b) => a.score - b.score
+    || a.groups.length - b.groups.length
+    || a.groups.map((x) => x.join()).join('|').localeCompare(b.groups.map((x) => x.join()).join('|')));
+  return out;
+}
+
+export function evaluateGroups(groups, byTeam) {
+  const players = groups.map((keys) => keys.flatMap((k) => byTeam[k] || []));
+  const stats = players.map(groupStat);
+  const totals = stats.map((s) => s.total);
+  const sizes = stats.map((s) => s.size);
+  const spread = Math.max(...totals) - Math.min(...totals);
+  const sizeSpread = Math.max(...sizes) - Math.min(...sizes);
+  const gkMissing = stats.filter((s) => s.gk === 0).length;
+  return {
+    groups, stats, players, spread, sizeSpread, gkMissing,
+    score: spread * 10 + sizeSpread * 4 + gkMissing * 25,
+  };
+}
+
+/** 참석 인원 → 권장 팀 묶음 수 (고정 4팀 기준) */
+export function suggestGroupCount(n, availableTeams = 4) {
+  const want = n >= 24 ? 4 : n >= 15 ? 3 : 2;
+  return Math.max(2, Math.min(availableTeams, want));
+}
+
+/** 한 팀이 경기하기에 부족한지 (5명 미만이거나 GK 없음) */
+export function teamShortage(stat) {
+  const reasons = [];
+  if (stat.size < 5) reasons.push('인원 부족');
+  if (stat.gk === 0) reasons.push('GK 없음');
+  return reasons;
+}
