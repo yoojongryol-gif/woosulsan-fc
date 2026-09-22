@@ -188,5 +188,63 @@ console.log('\n[4] 고정 4팀 · 합치기 제안 (v0.3.0)');
   ok('팀 이름 변경', s4.club.teamName('A') === '레드');
 }
 
+console.log('\n[5] 나이 (v0.4.1)');
+{
+  const { parseBirthYear, ageOf, ageLabel, parseMemberLine } = await import('../store.js');
+  const now = new Date('2026-06-01');
+  ok('4자리 그대로', parseBirthYear('1990', now) === 1990);
+  ok('2자리 90 → 1990', parseBirthYear('90', now) === 1990);
+  ok('2자리 10 → 2010 (16세)', parseBirthYear('10', now) === 2010);
+  ok('2자리 15 → 2015 (19xx 는 100세 초과)', parseBirthYear('15', now) === 2015);
+  ok('2자리 05 → 2005 (21세)', parseBirthYear('05', now) === 2005);
+  ok('빈 값·문자·범위 밖 → null',
+    parseBirthYear('', now) === null && parseBirthYear('abc', now) === null
+    && parseBirthYear('1800', now) === null && parseBirthYear('2030', now) === null && parseBirthYear('199', now) === null);
+  ok('연 나이 = 올해 - 출생년', ageOf(1990, now) === 36);
+  ok('표기 형식', ageLabel(1990, now) === '90년생 · 36세', ageLabel(1990, now));
+
+  ok('줄 파싱 "홍길동 90"', JSON.stringify(parseMemberLine('홍길동 90')) === JSON.stringify({ name: '홍길동', birthYear: 1990 }));
+  ok('줄 파싱 "김철수,1988"', parseMemberLine('김철수,1988').birthYear === 1988);
+  ok('줄 파싱 이름만', parseMemberLine('이영희').birthYear === null);
+  ok('줄 파싱 이름에 숫자 포함', parseMemberLine('선수7').name === '선수7' && parseMemberLine('선수7').birthYear === null);
+  ok('줄 파싱 잘못된 년도는 이름으로', parseMemberLine('박연도 1800').name === '박연도 1800');
+
+  const s2 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s2.init();
+  const added = s2.members.bulkAdd(['홍길동 90', '김철수,1988', '이영희', '최영 2001']);
+  ok('콤마 + 출생년도 = 한 명', added.filter((m) => m.name === '김철수').length === 1 && !added.some((m) => m.name === '1988'));
+  const added2 = s2.members.bulkAdd(['박하나, 박두리', '정세명']);
+  ok('콤마 이름 목록은 여러 명으로', added2.length === 3 && added2[0].name === '박하나' && added2[1].name === '박두리',
+    added2.map((m) => m.name).join('/'));
+  ok('일괄 추가에서 출생년도 파싱', added.length === 4
+    && added[0].birthYear === 1990 && added[1].birthYear === 1988 && added[2].birthYear === null && added[3].birthYear === 2001,
+    added.map((m) => `${m.name}:${m.birthYear}`).join(' '));
+
+  s2.members.update(added[2].id, { birthYear: '95' });
+  ok('수정 시 2자리 보정', s2.members.byId(added[2].id).birthYear === 1995);
+  s2.members.update(added[2].id, { birthYear: 'xx' });
+  ok('잘못된 값은 미입력 처리', s2.members.byId(added[2].id).birthYear === null);
+
+  // 팀 평균 나이 (입력된 사람 기준)
+  const players = [{ skill: 3, birthYear: 1990 }, { skill: 3, birthYear: 2000 }, { skill: 3 }];
+  const gs = groupStat(players, new Date('2026-06-01'));
+  ok('평균 나이 = 입력된 사람만', gs.ageAvg === 31 && gs.ageCount === 2 && gs.size === 3, `${gs.ageAvg}세 / ${gs.ageCount}명`);
+  ok('아무도 없으면 null', groupStat([{ skill: 3 }], now).ageAvg === null);
+  // .map(groupStat) 처럼 두 번째 인자가 인덱스로 들어와도 터지지 않아야 한다
+  ok('map(groupStat) 안전', [[{ skill: 3, birthYear: 1990 }], [{ skill: 2 }]].map(groupStat).length === 2);
+
+  // 마이그레이션 + JSON 왕복
+  const s3 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s3.init();
+  await s3.importJSON(JSON.stringify({ members: [{ id: 'old1', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
+  ok('옛 데이터 birthYear 없음 → null', s3.members.all()[0].birthYear === null);
+  const json3 = s2.exportJSON();
+  const s4 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s4.init();
+  await s4.importJSON(json3);
+  ok('JSON 왕복 — 출생년도 보존', s4.members.all().map((m) => m.birthYear).join() === s2.members.all().map((m) => m.birthYear).join(),
+    s4.members.all().map((m) => m.birthYear).join());
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);

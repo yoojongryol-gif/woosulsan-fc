@@ -21,6 +21,55 @@ export function emptyState() {
   };
 }
 
+/** 연 나이 = 올해 - 출생년도 (만 나이 아님) */
+export function ageOf(birthYear, now = new Date()) {
+  if (!birthYear) return null;
+  return now.getFullYear() - Number(birthYear);
+}
+
+/** 나이 표기: "90년생 · 36세" */
+export function ageLabel(birthYear, now = new Date()) {
+  const a = ageOf(birthYear, now);
+  if (a == null) return '';
+  return `${String(birthYear).slice(-2)}년생 · ${a}세`;
+}
+
+/**
+ * 출생년도 파싱. 4자리는 그대로, 2자리는 19xx/20xx 자동 보정.
+ * 규칙: 20xx 로 봤을 때 15세 이상이면 20xx, 아니면 19xx (19xx 가 100세 초과면 다시 20xx).
+ */
+export function parseBirthYear(v, now = new Date()) {
+  const raw = String(v ?? '').trim();
+  if (!raw) return null;
+  if (!/^\d{1,4}$/.test(raw)) return null;
+  const n = Number(raw);
+  const year = now.getFullYear();
+  if (raw.length === 4) {
+    if (n < 1900 || n > year) return null;
+    return n;
+  }
+  if (raw.length <= 2) {
+    const c20 = 2000 + n;
+    const c19 = 1900 + n;
+    if (c20 <= year && year - c20 >= 15) return c20;
+    if (year - c19 <= 100) return c19;
+    return c20 <= year ? c20 : null;
+  }
+  return null; // 3자리는 오타로 본다
+}
+
+/** 일괄 추가 한 줄 파싱: "홍길동", "홍길동 90", "홍길동,1990" */
+export function parseMemberLine(line) {
+  const raw = String(line ?? '').trim();
+  if (!raw) return null;
+  const m = raw.match(/^(.*?)[\s,\t]+(\d{2}|\d{4})$/);
+  if (m && m[1].trim()) {
+    const by = parseBirthYear(m[2]);
+    if (by) return { name: m[1].trim(), birthYear: by };
+  }
+  return { name: raw.replace(/[\s,]+$/, ''), birthYear: null };
+}
+
 export function uid(prefix = 'id') {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -96,6 +145,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       gk: !!m.gk,
       pos: ['FW', 'MF', 'DF', 'GK'].includes(m.pos) ? m.pos : 'MF',
       team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
+      birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
       active: m.active !== false,
       createdAt: m.createdAt || new Date().toISOString(),
     };
@@ -152,16 +202,25 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         touch();
         return m;
       },
+      /** names 는 "홍길동" 또는 "홍길동 90" 같은 줄도 허용 */
       bulkAdd(names, defaults = {}) {
         const added = [];
         const seen = new Set(state.members.map((m) => m.name));
+        const expand = (raw) => {
+          const parsed = parseMemberLine(raw);
+          if (!parsed) return [];
+          // "홍길동,90" 처럼 뒤가 출생년도면 한 명, "김철수, 이영희" 처럼 아니면 이름 목록
+          if (parsed.birthYear || !parsed.name.includes(',')) return [parsed];
+          return parsed.name.split(',').map((x) => parseMemberLine(x)).filter((x) => x && x.name);
+        };
         for (const raw of names) {
-          const name = String(raw).trim();
-          if (!name || seen.has(name)) continue;
-          seen.add(name);
-          const m = normalizeMember({ ...defaults, name });
-          state.members.push(m);
-          added.push(m);
+          for (const parsed of expand(raw)) {
+            if (!parsed.name || seen.has(parsed.name)) continue;
+            seen.add(parsed.name);
+            const m = normalizeMember({ ...defaults, name: parsed.name, birthYear: parsed.birthYear ?? defaults.birthYear ?? null });
+            state.members.push(m);
+            added.push(m);
+          }
         }
         touch();
         return added;

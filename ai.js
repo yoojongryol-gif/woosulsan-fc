@@ -217,6 +217,7 @@ function memberBrief(m, store) {
     포지션: m.pos,
     GK: !!m.gk,
     소속: m.team ? store.club.teamName(m.team) : '미배정',
+    나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null,
     출석률: st.rate == null ? null : st.rate,
   };
 }
@@ -251,9 +252,9 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
   const teams = {};
   for (const k of ['A', 'B', 'C', 'D']) {
     if (!att[k].length) continue;
-    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk }));
+    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null }));
   }
-  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk }));
+  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null }));
 
   const data = {
     경기: { 날짜: g.date, 장소: g.place || '미정' },

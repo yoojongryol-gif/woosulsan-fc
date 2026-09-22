@@ -498,3 +498,10 @@ main {
 .keyrow { display: flex; align-items: center; gap: 8px; }
 .keyrow code { flex: 1; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
 .keyrow .btn { margin: 0; }
+
+/* ---------- v0.4.1 나이 ---------- */
+.agebadge { display: inline-block; font-size: 10.5px; font-weight: 800; color: var(--text-3);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; vertical-align: 1px; }
+.field .hint { font-size: 11.5px; color: var(--text-3); font-weight: 600; margin-top: 5px; }
+.field .hint.bad { color: var(--danger); }
+.tstat .dimmer { color: var(--text-3); font-weight: 600; }

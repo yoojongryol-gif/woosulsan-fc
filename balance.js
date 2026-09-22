@@ -142,14 +142,19 @@ export function suggestTeamCount(n) {
 
 /* ===================== 고정 4팀 → 합치기 제안 (v0.3.0) ===================== */
 
-/** 선수 배열의 요약 통계 */
-export function groupStat(players) {
+/** 선수 배열의 요약 통계 (나이는 입력된 사람 기준, 합치기 점수에는 쓰지 않음) */
+export function groupStat(players, now) {
+  // .map(groupStat) 로 넘어올 때 두 번째 인자가 인덱스(숫자)인 경우가 있어 방어한다
+  const year = (now instanceof Date ? now : new Date()).getFullYear();
+  const ages = players.filter((p) => p.birthYear).map((p) => year - Number(p.birthYear));
   return {
     size: players.length,
     total: players.reduce((a, p) => a + (Number(p.skill) || 0), 0),
     avg: players.length ? Math.round((players.reduce((a, p) => a + (Number(p.skill) || 0), 0) / players.length) * 10) / 10 : 0,
     gk: players.filter((p) => p.gk).length,
     pos: ['FW', 'MF', 'DF'].reduce((o, k) => { o[k] = players.filter((p) => (p.pos || 'MF') === k).length; return o; }, {}),
+    ageCount: ages.length,
+    ageAvg: ages.length ? Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10 : null,
   };
 }
 

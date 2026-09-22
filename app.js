@@ -1,9 +1,9 @@
 /* 웃을산 FC — 앱 본체 */
-import { createStore, LocalStorageAdapter, TEAM_KEYS } from './store.js';
+import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear } from './store.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.4.0';
+export const APP_VERSION = 'v0.4.1';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -21,6 +21,7 @@ const ui = {
   teamSel: null,        // {t, i} 스왑 선택
   memberQuery: '',
   memberTeam: 'all',    // 회원 탭 팀 필터
+  memberSort: 'name',   // 'name' | 'age'
   showInactive: false,
   _suggestions: [],
 };
@@ -612,6 +613,7 @@ function renderTeam() {
       <div class="hd"><span class="dot"></span><b>${esc(teamName(k))}</b><span class="n">${list.length}명</span></div>
       <div class="meta">전력 ${s.total} · 평균 ${s.avg || 0}</div>
       <div class="meta">GK ${s.gk} · FW ${s.pos.FW} · MF ${s.pos.MF} · DF ${s.pos.DF}</div>
+      ${s.ageAvg != null ? `<div class="meta">평균 나이 ${s.ageAvg}세<span class="dimmer">${s.ageCount < s.size ? ` (${s.ageCount}명 기준)` : ''}</span></div>` : ''}
       ${short.length ? `<div class="warnline">${short.map((r) => `<span class="chip warn">${r}</span>`).join(' ')}</div>`
         : '<div class="okline">경기 가능</div>'}
     </div>`;
@@ -699,7 +701,7 @@ function renderTeam() {
           <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
         </button>`).join('')}
       </div>
-      <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}</div>
+      <div class="bfoot">FW ${st[i].pos.FW} · MF ${st[i].pos.MF} · DF ${st[i].pos.DF}${st[i].ageAvg != null ? ` · 평균 ${st[i].ageAvg}세` : ''}${st[i].gk ? '' : ' · <b style="color:var(--warn)">GK 없음</b>'}</div>
     </div>`;
   }).join('');
   html += `<div class="row wrap" style="margin-top:4px">
@@ -762,7 +764,9 @@ function renderMembers() {
     .filter((m) => (ui.showInactive ? true : m.active))
     .filter((m) => !q || m.name.includes(q))
     .filter((m) => ui.memberTeam === 'all' || (ui.memberTeam === 'none' ? !m.team : m.team === ui.memberTeam))
-    .sort((a, b) => (a.team || 'Z').localeCompare(b.team || 'Z') || a.name.localeCompare(b.name, 'ko'));
+    .sort((a, b) => (ui.memberSort === 'age'
+      ? ((a.birthYear || 9999) - (b.birthYear || 9999)) || a.name.localeCompare(b.name, 'ko')
+      : (a.team || 'Z').localeCompare(b.team || 'Z') || a.name.localeCompare(b.name, 'ko')));
   const counts = { none: all.filter((m) => m.active && !m.team).length };
   for (const k of TEAM_KEYS) counts[k] = all.filter((m) => m.active && m.team === k).length;
 
@@ -778,7 +782,8 @@ function renderMembers() {
       <button data-mt="none" aria-pressed="${ui.memberTeam === 'none'}">미배정 ${counts.none}</button>
     </div>
     <div class="section-title">회원 <span class="count">${list.length}${all.length !== list.length ? ` / ${all.length}` : ''}</span>
-      <button class="btn sm ghost right" id="btn-toggle-inactive">${ui.showInactive ? '활동 회원만' : '비활동 포함'}</button>
+      <button class="btn sm ghost right" id="btn-sort">${ui.memberSort === 'age' ? '나이순 ↑' : '이름순'}</button>
+      <button class="btn sm ghost" id="btn-toggle-inactive">${ui.showInactive ? '활동 회원만' : '비활동 포함'}</button>
     </div>`;
 
   if (!list.length) {
@@ -789,7 +794,7 @@ function renderMembers() {
       const st = store.stats.attendance(m.id);
       return `<button class="mem-item${m.active ? '' : ' off'}" data-member-edit="${m.id}">
         <div class="avatar">${esc(initial(m.name))}</div>
-        <div class="nm"><b>${esc(m.name)}${m.active ? '' : ' <span class="chip">비활동</span>'}</b>
+        <div class="nm"><b>${esc(m.name)}${m.birthYear ? ` <span class="agebadge">${ageOf(m.birthYear)}세</span>` : ''}${m.active ? '' : ' <span class="chip">비활동</span>'}</b>
           <div class="sub">${teamDot(m.team)}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}</div>
         </div>
         <div class="rate">${st.rate != null ? st.rate + '%' : '–'}<small>${st.present}/${st.total}회</small></div>
@@ -896,10 +901,15 @@ function matchModal(existing) {
 }
 
 function memberModal(existing) {
-  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', team: null, active: true };
+  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', team: null, birthYear: null, active: true };
   openModal(`
     <h3>${existing ? '회원 수정' : '회원 추가'}</h3>
     <div class="field"><label>이름</label><input type="text" id="f-name" value="${esc(m0.name)}" placeholder="이름" autocomplete="off"></div>
+    <div class="field"><label>출생년도 (선택)</label>
+      <input type="text" id="f-birth" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+             value="${m0.birthYear || ''}" placeholder="예: 90 또는 1990" autocomplete="off">
+      <div class="hint" id="birth-hint">${m0.birthYear ? esc(ageLabel(m0.birthYear)) : '2자리로 넣으면 자동으로 19xx/20xx 를 맞춥니다'}</div>
+    </div>
     <div class="field"><label>실력 (1~5)</label>
       <div class="skillpick" id="f-skill">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-s="${n}" aria-pressed="${m0.skill === n}">${n}</button>`).join('')}</div>
     </div>
@@ -951,7 +961,10 @@ function memberModal(existing) {
       }
       const name = $('#f-name', m).value.trim();
       if (!name) { toast('이름을 입력해 주세요', 'err'); return; }
-      const data = { name, skill, pos, team, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
+      const birthRaw = $('#f-birth', m).value.trim();
+      const birthYear = parseBirthYear(birthRaw);
+      if (birthRaw && !birthYear) { toast('출생년도를 확인해 주세요 (예: 90 또는 1990)', 'err'); return; }
+      const data = { name, skill, pos, team, birthYear, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
       if (existing) { store.members.update(existing.id, data); toast('수정했습니다'); }
       else { store.members.add(data); toast(`${name} 님 추가`); }
       closeModal(); render();
@@ -964,9 +977,11 @@ function bulkModal() {
   openModal(`
     <h3>회원 일괄 추가</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
-      이름을 한 줄에 하나씩 붙여넣으세요. 이미 있는 이름은 건너뜁니다.<br>실력은 기본 3, GK는 나중에 회원 수정에서 지정합니다.
+      이름을 한 줄에 하나씩 붙여넣으세요. 이미 있는 이름은 건너뜁니다.<br>
+      <b>이름 뒤에 출생년도</b>를 붙이면 함께 저장됩니다 — 예: <code>홍길동 90</code>, <code>김철수,1988</code><br>
+      실력은 기본 3, GK는 나중에 회원 수정에서 지정합니다.
     </div>
-    <textarea id="f-bulk" rows="8" placeholder="홍길동&#10;김철수&#10;이영희"></textarea>
+    <textarea id="f-bulk" rows="8" placeholder="홍길동 90&#10;김철수,1988&#10;이영희"></textarea>
     <div class="field" style="margin-top:12px"><label>소속 팀 (모두 같은 팀으로)</label>
       <div class="seg-wide" id="f-bteam">
         ${TEAM_KEYS.map((k) => `<button type="button" data-tk="${k}">${esc(store.club.teamName(k))}</button>`).join('')}
@@ -987,7 +1002,8 @@ function bulkModal() {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'cancel') return closeModal();
-      const names = $('#f-bulk', m).value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+      // 줄바꿈으로만 나눈다 (콤마는 "이름,출생년도" 구분자일 수 있어 store 에서 판단)
+      const names = $('#f-bulk', m).value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       if (!names.length) { toast('이름이 없습니다', 'err'); return; }
       const added = store.members.bulkAdd(names, { team: bteam });
       closeModal();
@@ -1324,6 +1340,7 @@ function bindEvents() {
     if (t.closest('#btn-add-member')) return memberModal(null);
     if (t.closest('#btn-bulk-member')) return bulkModal();
     if (t.closest('#btn-toggle-inactive')) { ui.showInactive = !ui.showInactive; return renderMembers(); }
+    if (t.closest('#btn-sort')) { ui.memberSort = ui.memberSort === 'age' ? 'name' : 'age'; return renderMembers(); }
     const mt = t.closest('.teamfilter [data-mt]');
     if (mt) { ui.memberTeam = mt.dataset.mt; return renderMembers(); }
     const me = t.closest('[data-member-edit]');
@@ -1349,6 +1366,17 @@ function bindEvents() {
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'f-birth') {
+      const hint = document.getElementById('birth-hint');
+      if (hint) {
+        const y = parseBirthYear(e.target.value);
+        hint.textContent = e.target.value.trim()
+          ? (y ? ageLabel(y) : '숫자 2자리 또는 4자리로 넣어 주세요')
+          : '2자리로 넣으면 자동으로 19xx/20xx 를 맞춥니다';
+        hint.classList.toggle('bad', !!e.target.value.trim() && !y);
+      }
+      return;
+    }
     if (e.target.id === 'member-q') {
       ui.memberQuery = e.target.value;
       const pos = e.target.selectionStart;
