@@ -7,7 +7,7 @@ import { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel 
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.3';
+export const APP_VERSION = 'v0.5.4';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -990,10 +990,15 @@ function adoptSuggestion(idx) {
 /** 팀 이름 편집 */
 function teamNameModal() {
   openModal(`
-    <h3>팀 이름</h3>
-    <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">고정 소속 팀 4개의 이름입니다. 회원은 이 중 한 팀에 속합니다.</div>
-    ${TEAM_KEYS.map((k) => `<div class="field"><label>${k}</label>
-      <input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12">
+    <h3>팀 설정</h3>
+    <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
+      고정 소속 팀 4개입니다. <b>약자</b>는 일괄 추가에서 줄 맨 앞에 쓰는 1~2글자예요 — 예: <code>체 진혜린 95 여 포워드</code>.
+    </div>
+    ${TEAM_KEYS.map((k, i) => `<div class="field"><label>${i + 1}번째 팀</label>
+      <div class="row" style="gap:6px">
+        <input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12" placeholder="팀 이름" style="flex:2">
+        <input type="text" data-ta="${k}" value="${esc(store.club.teamAlias(k))}" maxlength="2" placeholder="약자" style="flex:0 0 74px;text-align:center">
+      </div>
       <div class="togglerow" style="margin-top:6px">
         <label>혼성팀 (여성 회원 소속)</label>
         <button type="button" class="switch" data-mixed="${k}" aria-pressed="${store.club.isMixed(k)}"></button>
@@ -1026,6 +1031,7 @@ function teamNameModal() {
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
       $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
       $$('[data-coach]', m).forEach((sel) => store.club.setCoach(sel.dataset.coach, sel.value || null));
+      $$('[data-ta]', m).forEach((inp) => store.club.setTeamAlias(inp.dataset.ta, inp.value));
       closeModal();
       toast('팀 이름을 저장했습니다');
       render();
@@ -1089,8 +1095,12 @@ function coachRow(m, key) {
 
 /* ---------- 이름에 섞인 포지션 정리 (v0.5.3) ---------- */
 function messyNameMembers() {
+  const opts = {
+    teamNames: Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)])),
+    teamAliases: store.club.teamAliases(),
+  };
   return store.members.all().map((m) => {
-    const sp = splitNamePosition(m.name);
+    const sp = splitNamePosition(m.name, opts);
     if (!sp.changed || sp.name === m.name) return null;
     return { member: m, next: sp };
   }).filter(Boolean);
@@ -1102,14 +1112,14 @@ function nameFixSheet() {
   const draw = () => `
     <h3>이름에서 포지션 분리</h3>
     <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
-      이름 칸에 포지션이 함께 들어간 회원 ${rows.length}명입니다. 아래처럼 정리합니다.
+      이름 칸에 팀 약자나 포지션이 함께 들어간 회원 ${rows.length}명입니다. 아래처럼 정리합니다.
       이미 포지션을 직접 지정해 둔 회원은 <b>유지</b>로 두고, 바꾸려면 체크하세요.
     </div>
     ${rows.map((r, i) => {
       const keep = r.member.pos !== 'MF' && r.member.pos !== r.next.pos;
       return `<div class="fixrow">
         <div class="fr-name"><span class="old">${esc(r.member.name)}</span> → <b>${esc(r.next.name)}</b></div>
-        <div class="fr-meta">${esc(r.next.pos || '-')}${r.next.gk ? ' · GK' : ''}
+        <div class="fr-meta">${r.next.team ? `<span class="chip">${esc(teamName(r.next.team))}</span>` : ''}${esc(r.next.pos || '-')}${r.next.gk ? ' · GK' : ''}
           ${keep ? `<span class="chip warn">지금 ${esc(r.member.pos)} 유지</span>` : ''}</div>
         <label class="fr-chk"><input type="checkbox" data-fix="${i}" ${keep ? '' : 'checked'}> 적용</label>
       </div>`;
@@ -1132,6 +1142,7 @@ function nameFixSheet() {
         // 기본값(MF)이거나 사용자가 체크로 바꾸기를 택한 경우에만 포지션을 덮어쓴다
         if (r.next.pos) patch.pos = r.next.pos;
         if (r.next.gk) patch.gk = true;
+        if (r.next.team && !r.member.team) patch.team = r.next.team;   // 팀 미배정일 때만 채운다
         store.members.update(r.member.id, patch);
         n += 1;
       });
@@ -1220,7 +1231,7 @@ function renderMembers() {
     ${(() => {
       const messy = messyNameMembers();
       return messy.length ? `<div class="fixbanner">
-        <div><b>이름에 포지션이 섞인 회원 ${messy.length}명</b>
+        <div><b>이름에 팀·포지션이 섞인 회원 ${messy.length}명</b>
           <div class="s">${esc(messy.slice(0, 3).map((r) => r.member.name).join(', '))}${messy.length > 3 ? ' 외' : ''}</div></div>
         <button class="btn sm primary" id="btn-fix-names">분리하기</button>
       </div>` : '';
@@ -1262,7 +1273,7 @@ function renderMembers() {
         <button class="btn grow" id="btn-import">JSON 가져오기</button>
       </div>
       <button class="btn block" id="btn-paste-import" style="margin-bottom:8px">붙여넣어 가져오기</button>
-      <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름에서 포지션 분리</button>
+      <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름에서 팀·포지션 분리</button>
       <button class="btn block" id="btn-team-names-2" style="margin-bottom:8px">팀 이름 바꾸기</button>
       <input type="file" id="file-import" accept="application/json,.json" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
@@ -1508,11 +1519,11 @@ function bulkModal() {
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
       한 줄에 한 명씩 붙여넣으세요. <b>출생년도·성별·포지션</b>은 순서 상관없이 알아서 읽습니다.<br>
       예: <code>교 진혜린 95 여 포워드</code>, <code>정성현 85 남 센터백</code>, <code>김알곡 GK</code><br>
-      줄 맨 앞 <b>팀 약자</b>(팀 이름 첫 글자)를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
+      줄 맨 앞 <b>팀 약자</b>(${TEAM_KEYS.map((k) => esc(store.club.teamAlias(k))).join('·')})를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
     </div>
     <textarea id="f-bulk" rows="7" placeholder="교 진혜린 95 여 포워드&#10;정성현 85 남 센터백&#10;김철수"></textarea>
     <div id="bulk-preview" class="bulkpv"></div>
-    <div class="field" style="margin-top:12px"><label>소속 팀 (모두 같은 팀으로)</label>
+    <div class="field" style="margin-top:12px"><label>줄에 팀이 없을 때 기본값</label>
       <div class="seg-wide" id="f-bteam">
         ${TEAM_KEYS.map((k) => `<button type="button" data-tk="${k}">${esc(store.club.teamName(k))}</button>`).join('')}
         <button type="button" data-tk="" aria-pressed="true">미배정</button>
@@ -1526,12 +1537,13 @@ function bulkModal() {
       const box = $('#bulk-preview', m);
       if (!box) return;
       const teamNames = Object.fromEntries(TEAM_KEYS.map((k) => [k, teamName(k)]));
+      const teamAliases = store.club.teamAliases();
       const lines = $('#f-bulk', m).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       if (!lines.length) { box.innerHTML = ''; return; }
       const exist = new Set(store.members.all().map((x) => x.name));
       const seen = new Set();
       box.innerHTML = `<div class="pv-head">이렇게 읽었습니다 · ${lines.length}줄</div>` + lines.slice(0, 30).map((ln) => {
-        const r = parseMemberLine(ln, { teamNames });
+        const r = parseMemberLine(ln, { teamNames, teamAliases });
         if (!r || !r.name) return `<div class="pv-row bad"><b>${esc(ln)}</b><span>이름을 못 찾았습니다</span></div>`;
         const dup = exist.has(r.name) || seen.has(r.name);
         seen.add(r.name);
@@ -1545,6 +1557,7 @@ function bulkModal() {
         return `<div class="pv-row${dup ? ' dup' : ''}">
           <b>${esc(r.name)}</b><span>${bits || '추가 정보 없음'}</span>
           ${dup ? '<em>이미 있음</em>' : ''}
+          ${r.unknownTeam ? `<em>팀 약자를 못 읽음: ${esc(r.unknownTeam)}</em>` : ''}
           ${r.extraPos?.length ? `<em class="warn2">${esc(r.extraPos.join('/'))} 무시</em>` : ''}
         </div>`;
       }).join('') + (lines.length > 30 ? `<div class="pv-more">외 ${lines.length - 30}줄</div>` : '');

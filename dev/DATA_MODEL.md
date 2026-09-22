@@ -1,4 +1,4 @@
-# 웃을산 FC 데이터 모델 (schema 2, v0.5.3)
+# 웃을산 FC 데이터 모델 (schema 2, v0.5.4)
 
 저장은 `store.js` 어댑터 한 곳을 통해서만 이루어진다. 지금은 `LocalStorageAdapter`(키 `woosulsan-fc:v1`),
 나중에 같은 인터페이스(`load()` / `save(state)` / `clear()`)를 가진 `FirestoreAdapter` 로 갈아끼우면 화면 코드는 그대로다.
@@ -11,7 +11,8 @@
   "club": {
     "name": "웃을산 FC",
     "teamNames": { "A": "A팀", "B": "번개", "C": "C팀", "D": "D팀" },  // 고정 소속 팀 4개 이름(편집 가능)
-    "mixedTeams": ["D"],      // 혼성팀(여성 회원 소속) 키 목록, 1개 이상 가능
+    "teamAliases": { "A": "교", "B": "장", "C": "청", "D": "체" },  // 일괄 추가에서 줄 맨 앞에 쓰는 1~2글자(편집 가능)
+    "mixedTeams": ["D"],      // 혼성팀(여성 회원 소속). 기본값 = 체육(D)
     "lockWomen": true,        // 여성 회원 혼성팀 고정 (기본 ON, 팀 탭 토글)
     "coaches": { "A": "m_x1", "B": null, "C": null, "D": null }  // 팀별 감독 memberId (감독의 단일 출처)
   },
@@ -96,6 +97,9 @@ AI 설정은 `state` 에 **넣지 않는다**. localStorage 의 **다른 키**(`
 - `member.birthYear` 없으면 `null`(미입력). 잘못된 값도 `null` 로 정규화된다.
 - `member.abil` 없으면 6항목 모두 `null`. 1~5 밖의 값·문자도 `null` 로 정규화된다(`normalizeAbil`).
 - `member.gender` 없으면 `null`. `club.mixedTeams` 없으면 `[]`, `club.lockWomen` 없으면 `true`(기본 ON).
+- **v0.5.4 마이그레이션**: 팀 이름이 옛 기본값(`A팀~D팀`)이면 새 기본값 `교역/장년/청년/체육` 으로 자동 갱신하고
+  혼성팀이 비어 있으면 `체육(D)` 을 기본 지정한다. 사용자가 직접 바꾼 이름은 그대로 둔다.
+- 화면에는 내부 키(A~D)를 절대 노출하지 않는다 — 항상 `club.teamName(k)` / `club.teamAlias(k)` 로만 표시.
 - `club.coaches` 없으면 `{A:null,B:null,C:null,D:null}`. 회원을 삭제하면 그 회원이 맡던 감독 자리는 자동으로 비워진다.
 - 감독은 **회원 문서에 role 을 두지 않는다**. `club.coaches` 가 단일 출처이고, 화면의 감독 뱃지는 여기서 파생된다.
 - `club.teamNames` 없으면 기본값 `A팀~D팀`.
@@ -177,7 +181,7 @@ clubs/{clubId}                    name, teamNames{A..D}, adminUids[]
 
 | 종류 | 예 | 결과 |
 |---|---|---|
-| 팀 약자(줄 맨 앞) | `교`, `교역` | `team: 'A'` (팀 이름 첫 글자 또는 전체 일치할 때만) |
+| 팀 약자(줄 맨 앞) | `체`, `체육`, `D` | `team` — `club.teamAliases`(기본 교·장·청·체) → 팀 이름 → 내부 키 순으로 매칭 |
 | 출생년도 | `95`, `1995` | `birthYear` (2자리는 19xx/20xx 보정) |
 | 성별 | `여`, `남`, `F`, `M` | `gender` |
 | 포지션 | `포워드`, `미들`, `센터백`, `레프트 윙`, `GK` | `pos` (+ GK면 `gk:true`) |

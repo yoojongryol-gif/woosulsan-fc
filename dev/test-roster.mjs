@@ -65,7 +65,7 @@ ok('둘 다 없음', (() => { const p = parseMemberLine('홍길동'); return p.n
 const store = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
 await store.init();
 ok('기본 혼성팀 고정 ON', store.club.lockWomen() === true);
-ok('혼성팀 미지정', store.club.mixedTeams().length === 0);
+ok('기본 혼성팀 = 체육(D) (v0.5.4 사장님 확정)', store.club.mixedTeams().join() === 'D', store.club.mixedTeams().join());
 store.club.setMixed('D', true);
 ok('혼성팀 지정', store.club.isMixed('D') && !store.club.isMixed('A'));
 
@@ -141,7 +141,7 @@ console.log('\n[5] 마이그레이션 · JSON 왕복');
   await s2.init();
   await s2.importJSON(JSON.stringify({ members: [{ id: 'x', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
   ok('옛 데이터 성별 = 미입력', s2.members.all()[0].gender === null);
-  ok('옛 데이터 혼성팀 = 없음 · 고정은 ON', s2.club.mixedTeams().length === 0 && s2.club.lockWomen() === true);
+  ok('옛 데이터 → 체육 혼성팀 기본 지정 · 고정 ON', s2.club.mixedTeams().join() === 'D' && s2.club.lockWomen() === true);
 
   const s3 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
   await s3.init();

@@ -181,7 +181,7 @@ console.log('\n[4] 고정 4팀 · 합치기 제안 (v0.3.0)');
   await s6.init();
   await s6.importJSON(JSON.stringify({ members: [{ id: 'x1', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
   ok('마이그레이션 — team 없으면 미배정', s6.members.all()[0].team === null);
-  ok('마이그레이션 — 팀 이름 기본값', s6.club.teamName('D') === 'D팀');
+  ok('마이그레이션 — 팀 이름 기본값(v0.5.4: 교역/장년/청년/체육)', s6.club.teamName('D') === '체육');
 
   // 팀 이름 변경
   s4.club.setTeamName('A', '레드');

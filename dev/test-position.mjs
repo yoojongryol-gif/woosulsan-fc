@@ -40,10 +40,14 @@ ok('이름 속 글자(박미들)', P('박미들').pos === null);
 ok('이름만', sig(P('홍길동')) === '홍길동|||||');
 ok('팀 약자 아닌 한 글자는 이름으로', P('강 90').name === '강');
 ok('팀 이름 전체도 인식', P('교역 홍길동 90').team === 'A');
-ok('teamNames 없으면 약자 무시', parseMemberLine('교 진혜린 95 여 포워드').name === '교 진혜린');
+ok('옵션 없어도 기본 약자(교장청체)는 인식', (() => { const r = parseMemberLine('교 진혜린 95 여 포워드'); return r.name === '진혜린' && r.team === 'A'; })());
+ok('약자 아닌 한 글자 + 성이면 이름 유지', parseMemberLine('홍 길동 92', { teamNames: TN }).name === '홍 길동');
+ok('약자 아닌 한 글자(성 아님)는 경고', (() => { const r = parseMemberLine('쳬 오타남 88', { teamNames: TN }); return r.name === '오타남' && r.unknownTeam === '쳬'; })());
+ok('두 글자 이름은 절대 안 먹힘', parseMemberLine('한별 95 남 골키퍼', { teamNames: TN }).name === '한별');
 
 console.log('\n[4] 이름에서 분리(기존 회원 정리)');
-ok('김알곡 GK', JSON.stringify(splitNamePosition('김알곡 GK')) === JSON.stringify({ name: '김알곡', pos: 'GK', gk: true, extras: [], changed: true }));
+ok('김알곡 GK', (() => { const r = splitNamePosition('김알곡 GK'); return r.name === '김알곡' && r.pos === 'GK' && r.gk === true && r.changed === true; })());
+ok('체 진혜린 → 팀+이름 분리', (() => { const r = splitNamePosition('체 진혜린', { teamNames: TN }); return r.name === '진혜린' && r.team === 'D'; })());
 ok('이영희(미드)', splitNamePosition('이영희(미드)').name === '이영희');
 ok('정지원 레프트 윙', (() => { const r = splitNamePosition('정지원 레프트 윙'); return r.name === '정지원' && r.pos === 'FW'; })());
 ok('김수비는 그대로', splitNamePosition('김수비').changed === false);
