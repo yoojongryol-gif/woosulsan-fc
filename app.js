@@ -2,7 +2,7 @@
 import { createStore, LocalStorageAdapter, uid } from './store.js';
 import { balanceTeams, suggestTeamCount, statsOf, spreadOf } from './balance.js';
 
-export const APP_VERSION = 'v0.1.0';
+export const APP_VERSION = 'v0.2.0';
 const TEAM_NAMES = ['A팀', 'B팀', 'C팀'];
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a'];
 
@@ -270,7 +270,7 @@ function attItem(m, v) {
     <div class="avatar">${esc(initial(m.name))}</div>
     <div class="nm">
       <b>${esc(m.name)}</b>
-      <div class="sub">${stars(m.skill)} ${m.gk ? '<span class="chip gk">GK</span>' : ''} ${st.rate != null ? `출석률 ${st.rate}%` : ''}</div>
+      <div class="sub">${stars(m.skill)}${m.gk ? '<span class="chip gk">GK</span>' : ''}${st.rate != null ? `<span class="rate-mini">${st.rate}%</span>` : ''}</div>
     </div>
     <div class="seg" data-member="${m.id}">
       <button class="in" data-v="in" aria-pressed="${v === 'in'}">참석</button>
@@ -869,6 +869,20 @@ function registerSW() {
     });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
     setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+
+    // 버전 불일치(옛 화면 고착) 감지: 서비스워커 버전 ≠ 앱 버전이면 즉시 갱신
+    navigator.serviceWorker.addEventListener('message', (ev) => {
+      if (ev.data?.type !== 'VERSION' || ev.data.version === APP_VERSION) return;
+      console.warn('[sw] 버전 불일치', ev.data.version, '≠', APP_VERSION);
+      const once = 'fc-ver-reload';
+      reg.update().catch(() => {});
+      if (sessionStorage.getItem(once) === APP_VERSION) return; // 한 번만
+      sessionStorage.setItem(once, APP_VERSION);
+      caches.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k)))).then(() => location.reload());
+    });
+    const ping = () => navigator.serviceWorker.controller?.postMessage({ type: 'VERSION' });
+    ping();
+    navigator.serviceWorker.ready.then(ping);
   }).catch((e) => console.warn('[sw] 등록 실패', e));
 }
 

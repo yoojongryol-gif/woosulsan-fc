@@ -95,5 +95,16 @@ store.members.remove(all[0].id);
 ok('회원 삭제 시 출석·팀에서도 제거',
   store.matches.byId(g.id).teams.flat().length === 17 && !store.matches.byId(g.id).attendance[all[0].id]);
 
+console.log('\n[3] 전술 저장');
+{
+  const t1 = store.tactics.save({ id: undefined, matchId: g.id, team: 0, formation: '2-2-1', title: '전반 압박', pins: [{ memberId: 'x', x: 50, y: 50 }], strokes: [] });
+  ok('전술 저장 시 id 생성 (undefined 덮어쓰기 방지)', !!t1.id, String(t1.id));
+  const t2 = store.tactics.save({ id: t1.id, matchId: g.id, team: 0, formation: '2-2-1', title: '수정본', pins: [], strokes: [] });
+  ok('같은 id 로 덮어쓰기', t2.id === t1.id && store.tactics.byMatch(g.id).length === 1 && t2.title === '수정본');
+  ok('전술 byId 조회', store.tactics.byId(t1.id)?.title === '수정본');
+  store.tactics.remove(t1.id);
+  ok('전술 삭제', store.tactics.byMatch(g.id).length === 0);
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);

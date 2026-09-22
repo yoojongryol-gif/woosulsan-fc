@@ -259,7 +259,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
             return state.tactics[i];
           }
         }
-        const t = Object.assign({ id: uid('t'), updatedAt: new Date().toISOString() }, data);
+        // data.id 가 undefined 로 들어와도 생성된 id 를 덮어쓰지 않도록 뒤에서 확정
+        const t = Object.assign({}, data, { id: data.id || uid('t'), updatedAt: new Date().toISOString() });
         state.tactics.push(t);
         touch();
         return t;
