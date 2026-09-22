@@ -2,7 +2,7 @@
  * 원칙: network-first + 버전 스탬프 캐시명.
  * (cache-first + 고정 캐시명 = "옛 화면 고착" 사고 전례 → 금지)
  */
-const VERSION = 'v0.2.1';
+const VERSION = 'v0.2.2';
 const CACHE = `woosulsan-fc-${VERSION}`;
 const PRECACHE = [
   './', './index.html', './styles.css', './app.js', './store.js', './balance.js',
@@ -19,15 +19,22 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter((k) => k !== CACHE && k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k)));
+    await sweepOldCaches();
     await self.clients.claim();
   })());
 });
 
+async function sweepOldCaches() {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => k !== CACHE && k.startsWith('woosulsan-fc-')).map((k) => caches.delete(k)));
+}
+
 self.addEventListener('message', (e) => {
   if (e.data?.type === 'SKIP_WAITING') self.skipWaiting();
-  if (e.data?.type === 'VERSION') e.source?.postMessage({ type: 'VERSION', version: VERSION });
+  if (e.data?.type === 'VERSION') {
+    e.source?.postMessage({ type: 'VERSION', version: VERSION });
+    e.waitUntil?.(sweepOldCaches()); // 재적재 경합으로 남은 옛 캐시 정리
+  }
 });
 
 self.addEventListener('fetch', (e) => {

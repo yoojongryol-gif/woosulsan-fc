@@ -2,7 +2,7 @@
 import { createStore, LocalStorageAdapter, uid } from './store.js';
 import { balanceTeams, suggestTeamCount, statsOf, spreadOf } from './balance.js';
 
-export const APP_VERSION = 'v0.2.1';
+export const APP_VERSION = 'v0.2.2';
 const TEAM_NAMES = ['A팀', 'B팀', 'C팀'];
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a'];
 
