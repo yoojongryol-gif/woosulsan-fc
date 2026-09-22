@@ -16,6 +16,7 @@
 | `balance.js` | 팀 자동 밸런스 알고리즘(순수 함수) |
 | `tactics.js` | 전술판(포메이션·핀·그림판) |
 | `ai.js` | AI 기능 (Anthropic Messages API 브라우저 직접 호출) |
+| `roster.js` | 카톡 명단 붙여넣기 파서 · 회원 매칭 |
 | `sw.js` | 서비스워커 — network-first + 버전 스탬프 캐시명 |
 | `dev/DATA_MODEL.md` | 데이터 모델 (Firestore 이관 대비) |
 
@@ -23,6 +24,7 @@
 ```
 node dev/test-core.mjs     # 코어 로직 테스트
 node dev/test-ai.mjs       # AI 모듈 테스트(fetch 목)
+node dev/test-roster.mjs   # 명단 파서·성별·혼성팀 테스트
 node dev/make-icons.mjs    # 아이콘 PNG 생성
 python -m http.server 5177 # 로컬 미리보기
 ```

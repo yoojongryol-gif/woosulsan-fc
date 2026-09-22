@@ -34,11 +34,16 @@ function sum(list) { return list.reduce((a, p) => a + (Number(p.skill) || 0), 0)
 export function balanceTeams(players, teamCount = 2, opts = {}) {
   const seed = opts.seed ?? (Date.now() ^ Math.floor(Math.random() * 1e9));
   const rnd = mulberry32(seed);
-  const tc = Math.max(2, Math.min(3, teamCount | 0));
+  const tc = Math.max(2, Math.min(4, teamCount | 0));
+  const lock = opts.lock || {}; // { memberId: groupIndex }
   const pool = players.map((p) => ({
     id: p.id, name: p.name, gk: !!p.gk,
     skill: Math.min(5, Math.max(1, Number(p.skill) || 3)),
     pos: p.pos || 'MF',
+    birthYear: p.birthYear || null,
+    gender: p.gender || null,
+    abil: p.abil || null,
+    locked: Number.isInteger(lock[p.id]) ? Math.min(Math.max(lock[p.id], 0), Math.max(0, (teamCount | 0) - 1)) : null,
   }));
 
   if (pool.length === 0) {
@@ -53,12 +58,21 @@ export function balanceTeams(players, teamCount = 2, opts = {}) {
   keyed.sort((a, b) => b.k - a.k);
   const sorted = keyed.map((x) => x.p);
 
-  // 1) GK 우선 분산
-  const gks = sorted.filter((p) => p.gk);
-  const rest = sorted.filter((p) => !p.gk);
+  // 0) 고정 배치 선수 먼저 (혼성팀 여성 고정 등)
+  for (const p of sorted.filter((x) => x.locked != null)) {
+    const gi2 = Math.min(p.locked, tc - 1);
+    teams[gi2].push(p);
+  }
+
+  // 1) GK 우선 분산 (고정 배치된 사람 제외)
+  const free = sorted.filter((p) => p.locked == null);
+  const gks = free.filter((p) => p.gk && !teams.some((t) => t.some((x) => x.gk && x.locked != null && t.includes(x))));
+  const rest = free.filter((p) => !gks.includes(p));
   const gkOrder = shuffleTeamOrder(tc, rnd);
   let gi = 0;
   for (const g of gks) {
+    // 이미 GK 가 있는 팀은 건너뛴다
+    while (gi < tc && teams[gkOrder[gi]].some((x) => x.gk)) gi += 1;
     if (gi < tc) { teams[gkOrder[gi]].push(g); gi += 1; }
     else rest.push(g); // 남는 GK는 일반 풀로
   }
@@ -106,6 +120,7 @@ function hillClimb(teams, iterations, rnd) {
     const i = Math.floor(rnd() * teams[a].length);
     const j = Math.floor(rnd() * teams[b].length);
     const pa = teams[a][i]; const pb = teams[b][j];
+    if (pa.locked != null || pb.locked != null) continue; // 고정 배치는 움직이지 않는다
     if (pa.skill === pb.skill) continue;
     if (pa.gk !== pb.gk) continue; // GK 분산 유지: GK는 GK끼리만 교환
     teams[a][i] = pb; teams[b][j] = pa;
@@ -156,6 +171,8 @@ export function groupStat(players, now) {
     ageCount: ages.length,
     ageAvg: ages.length ? Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10 : null,
     abil: abilAverages(players),
+    male: players.filter((p) => p.gender === '남').length,
+    female: players.filter((p) => p.gender === '여').length,
   };
 }
 

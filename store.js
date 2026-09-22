@@ -21,6 +21,16 @@ export const ABILITIES = [
 ];
 export const ABILITY_KEYS = ABILITIES.map((a) => a.key);
 
+/** 성별 (미입력 허용) */
+export const GENDERS = ['남', '여'];
+export function parseGender(v) {
+  const t = String(v ?? '').trim().toLowerCase();
+  if (!t) return null;
+  if (['남', '남자', 'm', 'male', '♂'].includes(t)) return '남';
+  if (['여', '여자', 'f', 'female', 'w', '♀'].includes(t)) return '여';
+  return null;
+}
+
 export function normalizeAbil(raw) {
   const out = {};
   for (const k of ABILITY_KEYS) {
@@ -40,7 +50,7 @@ export function abilAvg(abil) {
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
-    club: { name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES } },
+    club: { name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES }, mixedTeams: [], lockWomen: true },
     members: [],
     matches: [],
     tactics: [],
@@ -85,16 +95,35 @@ export function parseBirthYear(v, now = new Date()) {
   return null; // 3자리는 오타로 본다
 }
 
-/** 일괄 추가 한 줄 파싱: "홍길동", "홍길동 90", "홍길동,1990" */
+/**
+ * 일괄 추가 한 줄 파싱: "홍길동", "홍길동 90", "홍길동,1990", "홍길동 90 여", "홍길동 여 90"
+ * 출생년도·성별 토큰은 순서 무관, 없으면 null.
+ */
 export function parseMemberLine(line) {
   const raw = String(line ?? '').trim();
   if (!raw) return null;
-  const m = raw.match(/^(.*?)[\s,\t]+(\d{2}|\d{4})$/);
-  if (m && m[1].trim()) {
-    const by = parseBirthYear(m[2]);
-    if (by) return { name: m[1].trim(), birthYear: by };
+  let rest = raw;
+  let birthYear = null;
+  let gender = null;
+
+  // 뒤에서부터 최대 2개 토큰을 떼어 본다
+  for (let i = 0; i < 2; i += 1) {
+    const m = rest.match(/^(.*?)[\s,\t]+([^\s,\t]+)$/);
+    if (!m || !m[1].trim()) break;
+    const tok = m[2];
+    if (birthYear == null && /^\d{2}$|^\d{4}$/.test(tok) && parseBirthYear(tok)) {
+      birthYear = parseBirthYear(tok);
+      rest = m[1].trim();
+      continue;
+    }
+    if (gender == null && parseGender(tok)) {
+      gender = parseGender(tok);
+      rest = m[1].trim();
+      continue;
+    }
+    break;
   }
-  return { name: raw.replace(/[\s,]+$/, ''), birthYear: null };
+  return { name: rest.replace(/[\s,]+$/, '').trim(), birthYear, gender };
 }
 
 export function uid(prefix = 'id') {
@@ -158,6 +187,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.schema = SCHEMA_VERSION;
     s.club = Object.assign({ name: '웃을산 FC' }, raw?.club || {});
     s.club.teamNames = Object.assign({ ...DEFAULT_TEAM_NAMES }, raw?.club?.teamNames || {});
+    s.club.mixedTeams = Array.isArray(raw?.club?.mixedTeams) ? raw.club.mixedTeams.filter((k) => TEAM_KEYS.includes(k)) : [];
+    s.club.lockWomen = raw?.club?.lockWomen !== false; // 기본 ON
     s.members = Array.isArray(s.members) ? s.members.map(normalizeMember) : [];
     s.matches = Array.isArray(s.matches) ? s.matches.map(normalizeMatch) : [];
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
@@ -174,6 +205,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
       abil: normalizeAbil(m.abil),           // 간단 체크 6항목 (미입력은 null)
+      gender: parseGender(m.gender),         // '남' | '여' | null
       active: m.active !== false,
       createdAt: m.createdAt || new Date().toISOString(),
     };
@@ -245,7 +277,9 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           for (const parsed of expand(raw)) {
             if (!parsed.name || seen.has(parsed.name)) continue;
             seen.add(parsed.name);
-            const m = normalizeMember({ ...defaults, name: parsed.name, birthYear: parsed.birthYear ?? defaults.birthYear ?? null });
+            const m = normalizeMember({ ...defaults, name: parsed.name,
+              birthYear: parsed.birthYear ?? defaults.birthYear ?? null,
+              gender: parsed.gender ?? defaults.gender ?? null });
             state.members.push(m);
             added.push(m);
           }
@@ -392,6 +426,19 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     club: {
       get() { return state.club; },
       teamName(key) { return state.club.teamNames?.[key] || DEFAULT_TEAM_NAMES[key] || key; },
+      /** 혼성팀 여부 */
+      isMixed(key) { return (state.club.mixedTeams || []).includes(key); },
+      mixedTeams() { return [...(state.club.mixedTeams || [])]; },
+      setMixed(key, on) {
+        if (!TEAM_KEYS.includes(key)) return;
+        const set = new Set(state.club.mixedTeams || []);
+        if (on) set.add(key); else set.delete(key);
+        state.club.mixedTeams = TEAM_KEYS.filter((k) => set.has(k));
+        touch();
+      },
+      /** 여성 회원 혼성팀 고정 (기본 ON) */
+      lockWomen() { return state.club.lockWomen !== false; },
+      setLockWomen(on) { state.club.lockWomen = !!on; touch(); },
       setTeamName(key, name) {
         if (!TEAM_KEYS.includes(key)) return;
         state.club.teamNames = Object.assign({ ...DEFAULT_TEAM_NAMES }, state.club.teamNames, { [key]: String(name).trim() || DEFAULT_TEAM_NAMES[key] });

@@ -229,6 +229,7 @@ function memberBrief(m, store) {
     GK: !!m.gk,
     소속: m.team ? store.club.teamName(m.team) : '미배정',
     나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null,
+    성별: m.gender || null,
     능력치: abilBrief(m),
     출석률: st.rate == null ? null : st.rate,
   };
@@ -238,6 +239,8 @@ export function buildClubContext(store, { matchId = null, includeMembers = true 
   const ctx = {
     모임: store.get().club.name,
     전체회원수: store.members.active().length,
+    혼성팀: store.club.mixedTeams().map((k) => store.club.teamName(k)),
+    여성_혼성팀_고정: store.club.lockWomen(),
   };
   if (includeMembers) ctx.회원 = store.members.active().map((m) => memberBrief(m, store));
   if (matchId) {
@@ -264,13 +267,17 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
   const teams = {};
   for (const k of ['A', 'B', 'C', 'D']) {
     if (!att[k].length) continue;
-    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 능력치: abilBrief(m) }));
+    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 성별: m.gender || null, 능력치: abilBrief(m) }));
   }
-  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 능력치: abilBrief(m) }));
+  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 성별: m.gender || null, 능력치: abilBrief(m) }));
 
+  const mixed = store.club.mixedTeams().map((k) => store.club.teamName(k));
+  const lockWomen = store.club.lockWomen();
   const data = {
     경기: { 날짜: g.date, 장소: g.place || '미정' },
     오늘팀수: groundCountSafe(groupCount),
+    혼성팀: mixed,
+    여성_혼성팀_고정: lockWomen,
     소속팀별참석자: teams,
     앱이_계산한_합치기후보: (candidates || []).map((c) => ({
       묶음: c.groups.map((grp) => grp.map((k) => (k === 'none' ? '미배정' : store.club.teamName(k))).join('+')),
@@ -285,7 +292,8 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
 {"teams":[{"name":"팀 이름","members":["이름",...]}],"reasons":["이유 3줄"],"cautions":["주의점"]}
 - members 에는 제공된 참석자 이름만, 한 사람은 한 팀에만 넣습니다. 전원을 배정하세요.
 - 팀 수는 "오늘팀수"와 같아야 합니다.
-- reasons 는 정확히 3개, cautions 는 1~3개(GK 공백·전력 쏠림·인원 차이 등).`,
+- reasons 는 정확히 3개, cautions 는 1~3개(GK 공백·전력 쏠림·인원 차이 등).
+${lockWomen ? '- **여성 회원(성별 "여")은 모두 같은 팀(혼성팀 또는 혼성팀이 포함된 묶음)에 넣으세요.** 다른 팀으로 나누지 마세요.' : '- 성별은 고려하지 않아도 됩니다.'}`,
     messages: [{ role: 'user', content: JSON.stringify(data, null, 1) }],
     maxTokens: 1500,
   };
@@ -297,7 +305,7 @@ export function tacticsPrompt({ players, teamLabel, formations, note }) {
   const data = {
     팀: teamLabel,
     인원: players.length,
-    선수: players.map((p) => ({ 이름: p.name, 실력: p.skill, 포지션: p.pos, GK: !!p.gk, 능력치: abilBrief(p) })),
+    선수: players.map((p) => ({ 이름: p.name, 실력: p.skill, 포지션: p.pos, GK: !!p.gk, 성별: p.gender || null, 능력치: abilBrief(p) })),
     선택가능_포메이션: formations,
     사용자메모: note || '',
   };

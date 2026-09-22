@@ -1,10 +1,11 @@
 /* 웃을산 FC — 앱 본체 */
 import { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirthYear,
-  ABILITIES, abilAvg } from './store.js';
+  ABILITIES, abilAvg, GENDERS, parseGender } from './store.js';
+import { parseRoster, matchNames } from './roster.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.4.2';
+export const APP_VERSION = 'v0.5.0';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -123,6 +124,7 @@ const ICON = {
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>',
   shuffle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 18 5-5 4 4 3-2.5 4 3.5"/></svg>',
+  paste: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/><path d="M8.5 12h7M8.5 16h5"/></svg>',
   ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 13.5 8 18 9.5 13.5 11 12 15.8 10.5 11 6 9.5 10.5 8 12 3.2Z"/><path d="M18.5 15.5 19.2 17.6 21.3 18.3 19.2 19 18.5 21.1 17.8 19 15.7 18.3 17.8 17.6 18.5 15.5Z"/><path d="M5.5 14 6 15.6 7.6 16.1 6 16.6 5.5 18.2 5 16.6 3.4 16.1 5 15.6 5.5 14Z"/></svg>',
   ball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m12 7 4 2.8-1.5 4.7h-5L8 9.8 12 7z" fill="currentColor" stroke="none" opacity=".3"/><path d="M12 3v4M3.6 9.6 8 9.8M20.4 9.6 16 9.8M6.5 19.6 9.5 14.5M17.5 19.6 14.5 14.5"/></svg>',
 };
@@ -254,8 +256,26 @@ async function aiTeamCoach() {
 
 function applyAIPlan() {
   const g = store.matches.byId(ui.teamMatchId);
-  const mapped = ui._aiPlan;
+  let mapped = ui._aiPlan;
   if (!g || !mapped) return;
+  // 여성 회원 혼성팀 고정: AI 가 흩어 놨으면 한 묶음으로 되돌린다
+  if (store.club.lockWomen()) {
+    const women = store.matches.attendees(g.id).filter((m) => m.gender === '여').map((m) => m.id);
+    if (women.length) {
+      const target = mapped.reduce((best, t, i) => {
+        const c = t.ids.filter((id) => women.includes(id)).length;
+        return c > best.c ? { i, c } : best;
+      }, { i: 0, c: -1 }).i;
+      let moved = 0;
+      mapped = mapped.map((t, i) => ({
+        ...t,
+        ids: i === target
+          ? [...new Set([...t.ids, ...women])]
+          : t.ids.filter((id) => { const w = women.includes(id); if (w) moved += 1; return !w; }),
+      }));
+      if (moved) toast(`여성 회원 ${moved}명을 혼성팀으로 옮겼습니다`);
+    }
+  }
   applyPlan({
     matchId: g.id, mode: 'shuffle', groups: [],
     labels: mapped.map((t, i) => t.name || `${i + 1}조`),
@@ -506,6 +526,9 @@ function renderAttend() {
         <button class="btn sm grow" data-att-all="clear">초기화</button>
         <button class="btn sm grow primary" data-go="team" data-match="${g.id}">팀 나누기 →</button>
       </div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn sm block grow paste" id="btn-roster">${ICON.paste} 카톡 명단 붙여넣기</button>
+      </div>
     </div>
     ${members.length ? members.map((m) => attItem(m, g.attendance[m.id])).join('')
       : `<div class="empty"><div class="big">등록된 회원이 없습니다</div><div>회원 탭에서 먼저 추가해 주세요.</div></div>`}
@@ -625,6 +648,8 @@ function renderTeam() {
       <div class="meta">GK ${s.gk} · FW ${s.pos.FW} · MF ${s.pos.MF} · DF ${s.pos.DF}</div>
       ${s.ageAvg != null ? `<div class="meta">평균 나이 ${s.ageAvg}세<span class="dimmer">${s.ageCount < s.size ? ` (${s.ageCount}명 기준)` : ''}</span></div>` : ''}
       ${abilLine(s.abil)}
+      ${s.male || s.female ? `<div class="meta">남 ${s.male} · 여 ${s.female}${store.club.isMixed(k) ? ' <span class="chip mixed">혼성</span>' : ''}</div>`
+        : (store.club.isMixed(k) ? '<div class="meta"><span class="chip mixed">혼성</span></div>' : '')}
       ${short.length ? `<div class="warnline">${short.map((r) => `<span class="chip warn">${r}</span>`).join(' ')}</div>`
         : '<div class="okline">경기 가능</div>'}
     </div>`;
@@ -678,6 +703,13 @@ function renderTeam() {
     html += `<div class="card flat" style="padding:12px"><div style="font-size:13px;color:var(--text-2)">
       참석한 소속 팀이 하나뿐입니다. 아래 "완전 새로 섞기"로 나누세요.</div></div>`;
   }
+  const anyWoman = store.members.active().some((m) => m.gender === '여');
+  if (anyWoman) {
+    html += `<div class="togglerow" style="margin-top:10px">
+      <label>여성 회원 혼성팀 고정${store.club.mixedTeams().length ? '' : ' <span class="dimmer">(혼성팀 미지정)</span>'}</label>
+      <button type="button" class="switch" id="btn-lock-women" aria-pressed="${store.club.lockWomen()}"></button>
+    </div>`;
+  }
   html += `<div class="row" style="margin-top:8px">
     <button class="btn block grow" id="btn-shuffle-all">${ICON.shuffle} 소속 무시하고 완전 새로 섞기</button>
   </div>
@@ -704,7 +736,7 @@ function renderTeam() {
     return `<div class="team-card">
       <div class="hd" style="background:${color}">
         <span class="t">${esc(labelOf(plan, i))}</span>
-        <span class="r">${t.length}명 · 전력 ${st[i].total} · GK ${st[i].gk}</span>
+        <span class="r">${t.length}명 · 전력 ${st[i].total} · GK ${st[i].gk}${st[i].female ? ` · 여 ${st[i].female}` : ''}</span>
       </div>
       <div class="bd">
         ${t.map((p, j) => `<button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}" data-swap="${i}:${j}">
@@ -748,7 +780,12 @@ function teamNameModal() {
   openModal(`
     <h3>팀 이름</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">고정 소속 팀 4개의 이름입니다. 회원은 이 중 한 팀에 속합니다.</div>
-    ${TEAM_KEYS.map((k) => `<div class="field"><label>${k}</label><input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12"></div>`).join('')}
+    ${TEAM_KEYS.map((k) => `<div class="field"><label>${k}</label>
+      <input type="text" data-tn="${k}" value="${esc(teamName(k))}" maxlength="12">
+      <div class="togglerow" style="margin-top:6px">
+        <label>혼성팀 (여성 회원 소속)</label>
+        <button type="button" class="switch" data-mixed="${k}" aria-pressed="${store.club.isMixed(k)}"></button>
+      </div></div>`).join('')}
     <div class="foot">
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
@@ -758,6 +795,7 @@ function teamNameModal() {
       if (!act) return;
       if (act === 'cancel') return closeModal();
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
+      $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
       closeModal();
       toast('팀 이름을 저장했습니다');
       render();
@@ -767,6 +805,13 @@ function teamNameModal() {
 
 
 /* ---------- 회원 ---------- */
+/** 여성 회원인데 소속 팀이 혼성팀이 아니면 안내 (오류 아님) */
+function womanWarn(m) {
+  if (m.gender !== '여' || !store.club.lockWomen()) return '';
+  if (m.team && store.club.isMixed(m.team)) return '';
+  return '<span class="chip warn">혼성팀 아님</span>';
+}
+
 /** 팀별 평균 능력치 요약표 (입력된 사람 기준) */
 function teamAbilTable() {
   const rows = TEAM_KEYS.map((k) => ({ k, members: store.members.byTeam(k) }))
@@ -830,7 +875,7 @@ function renderMembers() {
       return `<button class="mem-item${m.active ? '' : ' off'}" data-member-edit="${m.id}">
         <div class="avatar">${esc(initial(m.name))}</div>
         <div class="nm"><b>${esc(m.name)}${m.birthYear ? ` <span class="agebadge">${ageOf(m.birthYear)}세</span>` : ''}${m.active ? '' : ' <span class="chip">비활동</span>'}</b>
-          <div class="sub">${teamDot(m.team)}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}</div>
+          <div class="sub">${teamDot(m.team)}${m.gender ? `<span class="chip g${m.gender === '여' ? 'f' : 'm'}">${m.gender}</span>` : ''}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}${womanWarn(m)}</div>
         </div>
         <div class="rate">${st.rate != null ? st.rate + '%' : '–'}<small>${st.present}/${st.total}회</small></div>
       </button>`;
@@ -937,7 +982,7 @@ function matchModal(existing) {
 }
 
 function memberModal(existing) {
-  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', team: null, birthYear: null, active: true };
+  const m0 = existing || { name: '', skill: 3, gk: false, pos: 'MF', team: null, birthYear: null, gender: null, active: true };
   openModal(`
     <h3>${existing ? '회원 수정' : '회원 추가'}</h3>
     <div class="field"><label>이름</label><input type="text" id="f-name" value="${esc(m0.name)}" placeholder="이름" autocomplete="off"></div>
@@ -951,6 +996,12 @@ function memberModal(existing) {
     </div>
     <div class="field"><label>선호 포지션</label>
       <div class="seg-wide" id="f-pos">${['FW', 'MF', 'DF', 'GK'].map((p) => `<button type="button" data-p="${p}" aria-pressed="${m0.pos === p}">${p}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>성별 (선택)</label>
+      <div class="seg-wide" id="f-gender">
+        ${GENDERS.map((g2) => `<button type="button" data-g="${g2}" aria-pressed="${m0.gender === g2}">${g2}</button>`).join('')}
+        <button type="button" data-g="" aria-pressed="${!m0.gender}">미입력</button>
+      </div>
     </div>
     <div class="field"><label>소속 팀</label>
       <div class="seg-wide" id="f-team">
@@ -981,7 +1032,7 @@ function memberModal(existing) {
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
     </div>`, (m) => {
-    let skill = m0.skill; let pos = m0.pos; let team = m0.team || null;
+    let skill = m0.skill; let pos = m0.pos; let team = m0.team || null; let gender = m0.gender || null;
     const abil = Object.fromEntries(ABILITIES.map((a) => [a.key, m0.abil?.[a.key] ?? null]));
     const paintAbil = () => {
       for (const a of ABILITIES) {
@@ -1019,6 +1070,12 @@ function memberModal(existing) {
       }
       const sb = e.target.closest('#f-skill [data-s]');
       if (sb) { skill = Number(sb.dataset.s); $$('#f-skill [data-s]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === sb))); return; }
+      const gb = e.target.closest('#f-gender [data-g]');
+      if (gb) {
+        gender = gb.dataset.g || null;
+        $$('#f-gender [data-g]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === gb)));
+        return;
+      }
       const tb = e.target.closest('#f-team [data-tk]');
       if (tb) {
         team = tb.dataset.tk || null;
@@ -1050,7 +1107,7 @@ function memberModal(existing) {
       const birthRaw = $('#f-birth', m).value.trim();
       const birthYear = parseBirthYear(birthRaw);
       if (birthRaw && !birthYear) { toast('출생년도를 확인해 주세요 (예: 90 또는 1990)', 'err'); return; }
-      const data = { name, skill, pos, team, birthYear, abil, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
+      const data = { name, skill, pos, team, birthYear, abil, gender, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
       if (existing) { store.members.update(existing.id, data); toast('수정했습니다'); }
       else { store.members.add(data); toast(`${name} 님 추가`); }
       closeModal(); render();
@@ -1064,7 +1121,7 @@ function bulkModal() {
     <h3>회원 일괄 추가</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
       이름을 한 줄에 하나씩 붙여넣으세요. 이미 있는 이름은 건너뜁니다.<br>
-      <b>이름 뒤에 출생년도</b>를 붙이면 함께 저장됩니다 — 예: <code>홍길동 90</code>, <code>김철수,1988</code><br>
+      <b>이름 뒤에 출생년도·성별</b>을 붙이면 함께 저장됩니다 — 예: <code>홍길동 90</code>, <code>김철수,1988</code>, <code>이영희 92 여</code><br>
       실력은 기본 3, GK는 나중에 회원 수정에서 지정합니다.
     </div>
     <textarea id="f-bulk" rows="8" placeholder="홍길동 90&#10;김철수,1988&#10;이영희"></textarea>
@@ -1099,7 +1156,175 @@ function bulkModal() {
   });
 }
 
+/* ---------- 명단 붙여넣기 (카톡 투표/댓글 → 출석 자동 체크) ---------- */
+function rosterModal() {
+  const g = store.matches.byId(ui.attendMatchId);
+  if (!g) { toast('먼저 경기를 선택해 주세요', 'err'); return; }
+  let parsed = null;   // { in:[], out:[], maybe:[] }
+  let rows = [];       // 매칭 결과
+  let outRows = [];
+  let restMode = 'out'; // 명단에 없는 회원 처리: out | maybe | keep
+
+  openModal(`
+    <h3>카톡 명단 붙여넣기</h3>
+    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:8px">
+      카톡 투표 결과나 댓글을 그대로 붙여넣으세요. 번호·이모지·"참석/불참" 구분·쉼표 나열을 알아서 정리합니다.
+    </div>
+    <textarea id="f-roster" rows="7" placeholder="✅ 참석 (5)&#10;홍길동&#10;김철수&#10;&#10;❌ 불참&#10;박민수"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn primary grow" data-act="parse">명단 분석</button>
+      ${window.__fc_hasAIKey && window.__fc_hasAIKey() ? '<button class="btn grow ai" data-act="ai">AI로 정리</button>' : ''}
+    </div>
+    <div id="roster-preview"></div>
+    <div class="foot">
+      <button class="btn ghost" data-act="close">닫기</button>
+      <button class="btn primary" data-act="apply" disabled>적용</button>
+    </div>`, (m) => {
+    const preview = () => {
+      const box = $('#roster-preview', m);
+      if (!parsed) { box.innerHTML = ''; return; }
+      const matched = rows.filter((r) => r.status === 'matched');
+      const multi = rows.filter((r) => r.status === 'multi');
+      const none = rows.filter((r) => r.status === 'none');
+      const rest = store.members.active().filter((mm) => !rows.some((r) => r.memberId === mm.id));
+      box.innerHTML = `
+        <div class="rs-sum">
+          <span class="ok">참석 ${matched.length + multi.filter((r) => r.pick).length}</span>
+          ${multi.length ? `<span class="warn2">확인 필요 ${multi.length}</span>` : ''}
+          ${none.length ? `<span class="new">미등록 ${none.length}</span>` : ''}
+          ${outRows.length ? `<span>불참 ${outRows.length}</span>` : ''}
+        </div>
+        ${matched.length ? `<div class="rs-block"><b>참석 처리</b><div class="rs-names">${matched.map((r) => esc(store.members.byId(r.memberId)?.name || r.input)).join(', ')}</div></div>` : ''}
+        ${multi.length ? `<div class="rs-block"><b>누구인지 골라 주세요</b>
+          ${multi.map((r, i) => `<div class="rs-row"><span class="in">${esc(r.input)}</span>
+            <select data-multi="${i}">
+              <option value="">건너뛰기</option>
+              ${r.candidates.map((c) => `<option value="${c.id}" ${r.pick === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+            </select></div>`).join('')}</div>` : ''}
+        ${none.length ? `<div class="rs-block"><b>회원 명단에 없음</b>
+          ${none.map((r, i) => `<div class="rs-row"><span class="in">${esc(r.input)}</span>
+            <label class="rs-add"><input type="checkbox" data-new="${i}" ${r.add ? 'checked' : ''}> 새 회원으로 추가</label></div>`).join('')}</div>` : ''}
+        ${outRows.length ? `<div class="rs-block"><b>불참 처리</b><div class="rs-names">${outRows.map((r) => esc(store.members.byId(r.memberId)?.name || r.input)).join(', ')}</div></div>` : ''}
+        <div class="rs-block"><b>명단에 없는 회원 ${rest.length}명</b>
+          <div class="seg-wide" id="rs-rest">
+            <button type="button" data-rest="out" aria-pressed="${restMode === 'out'}">불참</button>
+            <button type="button" data-rest="maybe" aria-pressed="${restMode === 'maybe'}">미정</button>
+            <button type="button" data-rest="keep" aria-pressed="${restMode === 'keep'}">그대로</button>
+          </div>
+        </div>`;
+      $('[data-act="apply"]', m).disabled = !(matched.length || multi.some((r) => r.pick) || none.some((r) => r.add) || outRows.length);
+    };
+
+    const runParse = (text) => {
+      parsed = parseRoster(text);
+      const members = store.members.all();
+      rows = matchNames(parsed.in, members).map((r) => ({ ...r, pick: r.status === 'multi' && r.candidates.length === 1 ? r.candidates[0].id : null, add: false }));
+      outRows = matchNames(parsed.out, members).filter((r) => r.status === 'matched');
+      preview();
+      if (!parsed.in.length && !parsed.out.length) toast('이름을 찾지 못했습니다. 형식을 확인해 주세요', 'err');
+    };
+
+    m.addEventListener('change', (e) => {
+      const ms = e.target.closest('[data-multi]');
+      if (ms) {
+        const idx = Number(ms.dataset.multi);
+        const target = rows.filter((r) => r.status === 'multi')[idx];
+        if (target) target.pick = ms.value || null;
+        preview();
+      }
+      const nw = e.target.closest('[data-new]');
+      if (nw) {
+        const idx = Number(nw.dataset.new);
+        const target = rows.filter((r) => r.status === 'none')[idx];
+        if (target) target.add = nw.checked;
+        preview();
+      }
+    });
+
+    m.addEventListener('click', async (e) => {
+      const rb = e.target.closest('#rs-rest [data-rest]');
+      if (rb) {
+        restMode = rb.dataset.rest;
+        $$('#rs-rest [data-rest]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === rb)));
+        return;
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'parse') return runParse($('#f-roster', m).value);
+      if (act === 'ai') {
+        const text = $('#f-roster', m).value.trim();
+        if (!text) { toast('먼저 명단을 붙여넣어 주세요', 'err'); return; }
+        const r = await aiRun('#roster-preview', 'AI가 명단을 정리하는 중', {
+          system: `당신은 한국 축구 동호회 총무입니다. 붙여넣은 카톡 텍스트에서 사람 이름만 뽑아 아래 JSON 하나만 출력하세요.
+{"in":["참석 이름"],"out":["불참 이름"],"maybe":["미정 이름"]}
+- 텍스트에 없는 이름을 만들지 마세요. 별명·중복은 그대로 한 번만.
+- 참석/불참 구분이 없으면 모두 in 에 넣으세요.`,
+          messages: [{ role: 'user', content: text }],
+          maxTokens: 1200,
+        }, (res) => {
+          const j = res.json || {};
+          parsed = { in: j.in || [], out: j.out || [], maybe: j.maybe || [] };
+          const members = store.members.all();
+          rows = matchNames(parsed.in, members).map((x) => ({ ...x, pick: null, add: false }));
+          outRows = matchNames(parsed.out, members).filter((x) => x.status === 'matched');
+          return '<div class="ai-card ok"><div class="t">AI 정리 완료</div><div class="s">아래에서 확인 후 적용하세요.</div></div>';
+        }, { json: true });
+        if (r) setTimeout(preview, 50);
+        return;
+      }
+      if (act === 'apply') {
+        const map = Object.assign({}, store.matches.byId(g.id).attendance);
+        if (restMode !== 'keep') {
+          for (const mm of store.members.active()) map[mm.id] = restMode;
+        }
+        let inCount = 0; let added = 0;
+        for (const r of rows) {
+          let id = r.memberId || r.pick;
+          if (!id && r.status === 'none' && r.add) {
+            id = store.members.add({ name: r.input }).id;
+            added += 1;
+          }
+          if (id) { map[id] = 'in'; inCount += 1; }
+        }
+        for (const r of outRows) if (r.memberId) map[r.memberId] = 'out';
+        store.matches.setAttendanceBulk(g.id, map);
+        ui.teamPlan = null;
+        const outCount = Object.values(map).filter((v) => v === 'out').length;
+        render();
+        closeModal();
+        toast(`참석 ${inCount}${added ? ` (신규 ${added})` : ''} · 불참 ${outCount}`);
+        // 바로 팀 나누기 안내
+        const box = $('#view-attend');
+        if (box) {
+          const bar = document.createElement('div');
+          bar.className = 'gonext';
+          bar.innerHTML = `<span>참석 ${inCount}명 적용 완료</span><button class="btn sm primary" data-go="team" data-match="${g.id}">바로 팀 나누기 →</button>`;
+          box.prepend(bar);
+          setTimeout(() => bar.remove(), 12000);
+        }
+      }
+    });
+  });
+}
+
 /* ---------- 팀 배분 ---------- */
+/** 혼성팀 고정이 켜져 있으면 여성 참석자를 한 묶음(혼성팀이 든 묶음)에 고정한다 */
+function womenLock(attendees, groups = null) {
+  if (!store.club.lockWomen()) return {};
+  const women = attendees.filter((m) => m.gender === '여');
+  if (!women.length) return {};
+  const mixed = store.club.mixedTeams();
+  let idx = 0;
+  if (groups && groups.length) {
+    const found = groups.findIndex((grp) => grp.some((k) => mixed.includes(k)));
+    idx = found >= 0 ? found : 0;
+  }
+  const lock = {};
+  for (const w of women) lock[w.id] = idx;
+  return lock;
+}
+
 /** 소속을 무시하고 참석자 전체를 새로 섞는다 (mode: shuffle) */
 function doShuffleAll(reshuffle = false) {
   const g = store.matches.byId(ui.teamMatchId);
@@ -1108,7 +1333,7 @@ function doShuffleAll(reshuffle = false) {
   if (attendees.length < 2) { toast('참석자가 2명 이상이어야 합니다', 'err'); return; }
   const plan = currentPlan(g);
   const n = ui.groupCount || plan?.teams.length || suggestGroupCount(attendees.length, 4);
-  const res = balanceTeams(attendees, n, {});
+  const res = balanceTeams(attendees, n, { lock: womenLock(attendees) });
   applyPlan({
     matchId: g.id, mode: 'shuffle', groups: [],
     teams: res.teams.map((t) => t.map((p) => p.id)),
@@ -1313,6 +1538,14 @@ function bindEvents() {
       $$('[data-v]', seg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === next)));
       updateAttendCounts();
       return;
+    }
+    if (t.closest('#btn-roster')) return rosterModal();
+    if (t.closest('#btn-lock-women')) {
+      const on = store.club.lockWomen();
+      store.club.setLockWomen(!on);
+      ui.teamPlan = null;
+      toast(!on ? '여성 회원을 혼성팀에 고정합니다' : '성별 고정을 껐습니다');
+      return renderTeam();
     }
     const all = t.closest('[data-att-all]');
     if (all) {
@@ -1541,6 +1774,8 @@ async function main() {
     });
 }
 
+window.__fc_hasAIKey = () => AI.hasKey();
 window.__fc = { store, ui, render, balanceTeams, suggestMerges, switchTab, adoptSuggestion, doShuffleAll,
+  rosterModal, parseRoster, matchNames, womenLock,
   APP_VERSION, TEAM_KEYS, AI, aiTeamCoach, applyAIPlan, aiNoticeModal, aiAskModal, aiState };
 main();

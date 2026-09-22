@@ -203,7 +203,7 @@ console.log('\n[5] 나이 (v0.4.1)');
   ok('연 나이 = 올해 - 출생년', ageOf(1990, now) === 36);
   ok('표기 형식', ageLabel(1990, now) === '90년생 · 36세', ageLabel(1990, now));
 
-  ok('줄 파싱 "홍길동 90"', JSON.stringify(parseMemberLine('홍길동 90')) === JSON.stringify({ name: '홍길동', birthYear: 1990 }));
+  ok('줄 파싱 "홍길동 90"', parseMemberLine('홍길동 90').name === '홍길동' && parseMemberLine('홍길동 90').birthYear === 1990);
   ok('줄 파싱 "김철수,1988"', parseMemberLine('김철수,1988').birthYear === 1988);
   ok('줄 파싱 이름만', parseMemberLine('이영희').birthYear === null);
   ok('줄 파싱 이름에 숫자 포함', parseMemberLine('선수7').name === '선수7' && parseMemberLine('선수7').birthYear === null);

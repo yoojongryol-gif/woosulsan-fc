@@ -540,3 +540,31 @@ main {
 .abil-table td.tm { text-align: left; font-weight: 800; }
 .abil-table td.hi { color: var(--accent); }
 .abil-table tr:last-child td { border-bottom: none; }
+
+/* ---------- v0.5.0 명단 붙여넣기 · 성별 ---------- */
+.btn.paste { background: var(--surface-2); }
+.rs-sum { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 8px; }
+.rs-sum span { font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); }
+.rs-sum .ok { background: var(--accent-soft); color: var(--accent-ink); }
+.rs-sum .warn2 { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.rs-sum .new { background: color-mix(in srgb, var(--t-b) 16%, transparent); color: var(--t-b); }
+.rs-block { margin-bottom: 10px; padding: 10px 12px; background: var(--surface-2); border-radius: 12px; }
+.rs-block > b { display: block; font-size: 12px; font-weight: 800; color: var(--text-2); margin-bottom: 6px; }
+.rs-names { font-size: 13px; line-height: 1.6; }
+.rs-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rs-row .in { flex: 0 0 84px; font-weight: 700; font-size: 13.5px; }
+.rs-row select { flex: 1; padding: 8px 10px; }
+.rs-add { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--text-2); }
+.rs-add input { width: 20px; height: 20px; }
+.gonext {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 10px 12px;
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 12px; font-size: 13px; font-weight: 700; color: var(--accent-ink);
+}
+.gonext .btn { margin-left: auto; }
+.chip.gf { background: color-mix(in srgb, #c2568f 16%, transparent); color: #b04a80; border-color: transparent; }
+.chip.gm { background: color-mix(in srgb, var(--t-b) 14%, transparent); color: var(--t-b); border-color: transparent; }
+.chip.mixed { background: color-mix(in srgb, #c2568f 14%, transparent); color: #b04a80; border-color: transparent; }
+@media (prefers-color-scheme: dark) {
+  .chip.gf, .chip.mixed { color: #e79bc2; }
+}
