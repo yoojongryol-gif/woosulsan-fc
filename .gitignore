@@ -1,2 +1,5 @@
 .playwright-mcp/
 node_modules/
+
+# 사장님 실명 명단 메모 (공개 저장소에 올리지 않는다)
+dev/roster/
