@@ -50,7 +50,11 @@ export function abilAvg(abil) {
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
-    club: { name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES }, mixedTeams: [], lockWomen: true },
+    club: {
+      name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES },
+      mixedTeams: [], lockWomen: true,
+      coaches: { A: null, B: null, C: null, D: null }, // 팀별 감독 memberId (단일 출처)
+    },
     members: [],
     matches: [],
     tactics: [],
@@ -189,6 +193,10 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.club.teamNames = Object.assign({ ...DEFAULT_TEAM_NAMES }, raw?.club?.teamNames || {});
     s.club.mixedTeams = Array.isArray(raw?.club?.mixedTeams) ? raw.club.mixedTeams.filter((k) => TEAM_KEYS.includes(k)) : [];
     s.club.lockWomen = raw?.club?.lockWomen !== false; // 기본 ON
+    s.club.coaches = Object.fromEntries(TEAM_KEYS.map((k) => {
+      const v = raw?.club?.coaches?.[k];
+      return [k, typeof v === 'string' && v ? v : null];
+    }));
     s.members = Array.isArray(s.members) ? s.members.map(normalizeMember) : [];
     s.matches = Array.isArray(s.matches) ? s.matches.map(normalizeMatch) : [];
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
@@ -206,6 +214,11 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
       abil: normalizeAbil(m.abil),           // 간단 체크 6항목 (미입력은 null)
       gender: parseGender(m.gender),         // '남' | '여' | null
+      // 평가 메타 — 3단계에서 감독 uid 가 들어갈 자리 (지금은 'owner')
+      skillUpdatedAt: m.skillUpdatedAt || null,
+      skillUpdatedBy: m.skillUpdatedBy || null,
+      abilUpdatedAt: m.abilUpdatedAt || null,
+      abilUpdatedBy: m.abilUpdatedBy || null,
       active: m.active !== false,
       createdAt: m.createdAt || new Date().toISOString(),
     };
@@ -288,6 +301,19 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         return added;
       },
       byTeam(key) { return state.members.filter((m) => m.active && m.team === key); },
+      /** 종합 실력 평가 (누가 언제 고쳤는지 기록) */
+      setSkill(id, skill, by = 'owner') {
+        return api.members.update(id, { skill, skillUpdatedAt: new Date().toISOString(), skillUpdatedBy: by });
+      },
+      /** 간단 체크 평가 */
+      setAbil(id, abil, by = 'owner') {
+        const cur = api.members.byId(id);
+        if (!cur) return null;
+        return api.members.update(id, {
+          abil: { ...cur.abil, ...abil },
+          abilUpdatedAt: new Date().toISOString(), abilUpdatedBy: by,
+        });
+      },
       unassigned() { return state.members.filter((m) => m.active && !m.team); },
       update(id, patch) {
         const i = state.members.findIndex((m) => m.id === id);
@@ -298,6 +324,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       },
       remove(id) {
         state.members = state.members.filter((m) => m.id !== id);
+        const c = state.club.coaches || {};
+        for (const k of TEAM_KEYS) if (c[k] === id) c[k] = null;
         for (const g of state.matches) {
           delete g.attendance[id];
           g.teams = (g.teams || []).map((t) => t.filter((x) => x !== id));
@@ -435,6 +463,30 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         if (on) set.add(key); else set.delete(key);
         state.club.mixedTeams = TEAM_KEYS.filter((k) => set.has(k));
         touch();
+      },
+      /** 팀 감독 (그 팀 소속 회원 1명, 없으면 null) */
+      coach(key) { return state.club.coaches?.[key] || null; },
+      coaches() { return { ...(state.club.coaches || {}) }; },
+      setCoach(key, memberId) {
+        if (!TEAM_KEYS.includes(key)) return;
+        state.club.coaches = { ...(state.club.coaches || {}), [key]: memberId || null };
+        touch();
+      },
+      /** 이 회원이 감독인 팀 키 (아니면 null) */
+      coachTeamOf(memberId) {
+        const c = state.club.coaches || {};
+        return TEAM_KEYS.find((k) => c[k] && c[k] === memberId) || null;
+      },
+      /** 감독인데 그 팀 소속이 아닌 경우 목록 (안내용, 오류 아님) */
+      coachMismatches() {
+        const c = state.club.coaches || {};
+        return TEAM_KEYS.filter((k) => c[k]).map((k) => {
+          const m = state.members.find((x) => x.id === c[k]);
+          if (!m) return { key: k, member: null, reason: 'missing' };
+          if (!m.active) return { key: k, member: m, reason: 'inactive' };
+          if (m.team !== k) return { key: k, member: m, reason: 'moved' };
+          return null;
+        }).filter(Boolean);
       },
       /** 여성 회원 혼성팀 고정 (기본 ON) */
       lockWomen() { return state.club.lockWomen !== false; },

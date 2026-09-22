@@ -5,7 +5,7 @@ import { parseRoster, matchNames } from './roster.js';
 import { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage } from './balance.js';
 import * as AI from './ai.js';
 
-export const APP_VERSION = 'v0.5.0';
+export const APP_VERSION = 'v0.5.1';
 /** 고정 소속 팀 A~D 색 */
 const TEAM_COLORS = ['#1f7a4d', '#2f5fa8', '#b4552a', '#6b4ea8'];
 export { TEAM_KEYS };
@@ -25,6 +25,9 @@ const ui = {
   memberTeam: 'all',    // 회원 탭 팀 필터
   memberSort: 'name',   // 'name' | 'age'
   rosterDone: null,     // 명단 적용 결과 배너
+  coachMode: false,     // 회원 탭 '감독 평가 화면'
+  coachTeam: 'A',       // 감독 평가 대상 팀
+  coachOpen: null,      // 펼친 회원 id
   showInactive: false,
   _suggestions: [],
 };
@@ -53,6 +56,13 @@ function stars(n) {
   return `<span class="stars">${out}</span>`;
 }
 function initial(name) { return String(name || '?').trim().slice(-2); }
+/** 감독 뱃지 (팀 감독이면 표시) */
+function coachBadge(memberId) {
+  const k = store.club.coachTeamOf(memberId);
+  if (!k) return '';
+  const mism = store.members.byId(memberId)?.team !== k;
+  return `<span class="chip coach${mism ? ' warn' : ''}" title="${esc(teamName(k))} 감독">🎽 감독</span>`;
+}
 function teamDot(key) {
   const i = TEAM_KEYS.indexOf(key);
   if (i < 0) return '<span class="tbadge none">미배정</span>';
@@ -650,6 +660,7 @@ function renderTeam() {
     const short = list.length ? teamShortage(s) : ['참석 없음'];
     return `<div class="tstat" style="--c:${TEAM_COLORS[i]}">
       <div class="hd"><span class="dot"></span><b>${esc(teamName(k))}</b><span class="n">${list.length}명</span></div>
+      ${store.club.coach(k) ? `<div class="meta coachline">🎽 감독 ${esc(store.members.byId(store.club.coach(k))?.name || '-')}</div>` : ''}
       <div class="meta">전력 ${s.total} · 평균 ${s.avg || 0}</div>
       <div class="meta">GK ${s.gk} · FW ${s.pos.FW} · MF ${s.pos.MF} · DF ${s.pos.DF}</div>
       ${s.ageAvg != null ? `<div class="meta">평균 나이 ${s.ageAvg}세<span class="dimmer">${s.ageCount < s.size ? ` (${s.ageCount}명 기준)` : ''}</span></div>` : ''}
@@ -746,7 +757,7 @@ function renderTeam() {
       </div>
       <div class="bd">
         ${t.map((p, j) => `<button class="pcard${ui.teamSel && ui.teamSel.t === i && ui.teamSel.i === j ? ' sel' : ''}" data-swap="${i}:${j}">
-          ${p.gk ? '<span class="gkb">GK</span>' : ''}
+          ${p.gk ? '<span class="gkb">GK</span>' : ''}${store.club.coachTeamOf(p.id) ? '<span class="cb">🎽</span>' : ''}
           <span class="n">${esc(p.name)}</span><span class="sk">${p.skill}</span>
         </button>`).join('')}
       </div>
@@ -791,7 +802,24 @@ function teamNameModal() {
       <div class="togglerow" style="margin-top:6px">
         <label>혼성팀 (여성 회원 소속)</label>
         <button type="button" class="switch" data-mixed="${k}" aria-pressed="${store.club.isMixed(k)}"></button>
+      </div>
+      <div class="field" style="margin:8px 0 0">
+        <label>감독 (이 팀 회원 중 1명)</label>
+        <select data-coach="${k}">
+          <option value="">없음</option>
+          ${store.members.byTeam(k).map((mm) => `<option value="${mm.id}" ${store.club.coach(k) === mm.id ? 'selected' : ''}>${esc(mm.name)}</option>`).join('')}
+          ${(() => {
+            const cur = store.club.coach(k);
+            const m2 = cur ? store.members.byId(cur) : null;
+            return m2 && m2.team !== k ? `<option value="${m2.id}" selected>${esc(m2.name)} (다른 팀)</option>` : '';
+          })()}
+        </select>
       </div></div>`).join('')}
+    ${store.club.coachMismatches().length ? `<div class="card flat" style="padding:10px 12px">
+      ${store.club.coachMismatches().map((x) => `<div style="font-size:12.5px"><span class="chip warn">확인</span>
+        ${esc(teamName(x.key))} 감독 ${esc(x.member?.name || '(삭제된 회원)')} —
+        ${x.reason === 'moved' ? `지금은 ${esc(x.member.team ? teamName(x.member.team) : '미배정')} 소속입니다` : x.reason === 'inactive' ? '비활동 회원입니다' : '회원 목록에 없습니다'}</div>`).join('')}
+    </div>` : ''}
     <div class="foot">
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
@@ -802,6 +830,7 @@ function teamNameModal() {
       if (act === 'cancel') return closeModal();
       $$('[data-tn]', m).forEach((inp) => store.club.setTeamName(inp.dataset.tn, inp.value));
       $$('[data-mixed]', m).forEach((b) => store.club.setMixed(b.dataset.mixed, b.getAttribute('aria-pressed') === 'true'));
+      $$('[data-coach]', m).forEach((sel) => store.club.setCoach(sel.dataset.coach, sel.value || null));
       closeModal();
       toast('팀 이름을 저장했습니다');
       render();
@@ -810,8 +839,81 @@ function teamNameModal() {
 }
 
 
+/* ---------- 감독 평가 화면 (팀 감독이 종합 실력을 빠르게 입력) ---------- */
+function renderCoachMode(root) {
+  const key = TEAM_KEYS.includes(ui.coachTeam) ? ui.coachTeam : 'A';
+  ui.coachTeam = key;
+  const list = store.members.byTeam(key).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  const coachId = store.club.coach(key);
+  const coach = coachId ? store.members.byId(coachId) : null;
+
+  root.innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn grow" id="btn-coach-exit">← 회원 목록</button>
+      <button class="btn grow ghost" id="btn-team-names-3">팀·감독 설정</button>
+    </div>
+    <div class="coach-head">
+      <div class="t">감독 평가 화면</div>
+      <div class="s">팀을 고르고 각 선수의 종합 실력을 바로 눌러 주세요. 저장은 자동입니다.</div>
+    </div>
+    <div class="seg-wide" id="coach-team">
+      ${TEAM_KEYS.map((k) => `<button data-ct="${k}" aria-pressed="${k === key}">${esc(teamName(k))}</button>`).join('')}
+    </div>
+    <div class="coach-sub">${coach ? `🎽 감독: ${esc(coach.name)}${coach.team !== key ? ' <span class="chip warn">다른 팀 소속</span>' : ''}` : '감독 미지정 — 팀·감독 설정에서 지정할 수 있습니다'}</div>
+    ${list.length ? list.map((m) => coachRow(m, key)).join('')
+      : `<div class="empty"><div class="big">이 팀에 회원이 없습니다</div><div>회원 탭에서 소속 팀을 지정해 주세요.</div></div>`}
+    <div class="footer-note">종합 실력만 팀 밸런스에 쓰입니다. 간단 체크는 참고용입니다.</div>`;
+}
+
+function coachRow(m, key) {
+  const open = ui.coachOpen === m.id;
+  return `<div class="crow${open ? ' open' : ''}" data-crow="${m.id}">
+    <div class="line">
+      <div class="who">
+        <b>${esc(m.name)}</b>${store.club.coachTeamOf(m.id) === key ? '<span class="chip coach">🎽</span>' : ''}
+        <div class="meta">${m.birthYear ? `${ageOf(m.birthYear)}세 · ` : ''}${esc(m.pos)}${m.gk ? ' · GK' : ''}${m.skillUpdatedAt ? ` · ${esc(fmtWhen(m.skillUpdatedAt))} ${esc(whoLabel(m.skillUpdatedBy))}` : ' · 미평가'}</div>
+      </div>
+      <div class="dots" data-skill="${m.id}">
+        ${[1, 2, 3, 4, 5].map((n) => `<button class="dot" data-v="${n}" aria-pressed="${m.skill >= n}" aria-label="${esc(m.name)} 실력 ${n}"></button>`).join('')}
+      </div>
+      <button class="more" data-copen="${m.id}" aria-expanded="${open}">${open ? '▴' : '▾'}</button>
+    </div>
+    ${open ? `<div class="detail">
+      ${ABILITIES.map((a) => `<div class="abil-row" data-cabil="${m.id}:${a.key}">
+        <span class="nm">${a.label}</span>
+        <span class="dots">
+          ${[1, 2, 3, 4, 5].map((n) => `<button class="dot" data-v="${n}" aria-pressed="${(m.abil?.[a.key] || 0) >= n}"></button>`).join('')}
+          <button class="clr" data-v="0">×</button>
+        </span>
+      </div>`).join('')}
+      <div class="hint">${m.abilUpdatedAt ? `간단 체크 ${esc(fmtWhen(m.abilUpdatedAt))} · ${esc(whoLabel(m.abilUpdatedBy))}` : '간단 체크 미입력'}
+        ${abilAvg(m.abil) ? ` · 세부 평균 ${abilAvg(m.abil)}` : ''}</div>
+    </div>` : ''}
+  </div>`;
+}
+
 /* ---------- 회원 ---------- */
 /** 여성 회원인데 소속 팀이 혼성팀이 아니면 안내 (오류 아님) */
+/** 평가 시각·주체 표기 */
+function fmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const today = new Date();
+  const same = d.toDateString() === today.toDateString();
+  return same ? `오늘 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    : `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+function whoLabel(by) {
+  if (!by) return '';
+  if (by === 'owner') return '운영자';
+  if (String(by).startsWith('coach')) {
+    const k = String(by).split(':')[1];
+    return k ? `${teamName(k)} 감독` : '감독';
+  }
+  return String(by);
+}
+
 function womanWarn(m) {
   if (m.gender !== '여' || !store.club.lockWomen()) return '';
   if (m.team && store.club.isMixed(m.team)) return '';
@@ -844,6 +946,7 @@ function teamAbilTable() {
 
 function renderMembers() {
   const root = $('#view-members');
+  if (ui.coachMode) return renderCoachMode(root);
   const all = store.members.all();
   const q = ui.memberQuery.trim();
   const list = all
@@ -860,6 +963,9 @@ function renderMembers() {
     <div class="row" style="margin-bottom:10px">
       <button class="btn primary grow" id="btn-add-member">${ICON.plus} 회원 추가</button>
       <button class="btn grow" id="btn-bulk-member">일괄 추가</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn block grow" id="btn-coach-mode">🎽 감독 평가 화면</button>
     </div>
     <div class="search-wrap">${ICON.search}<input id="member-q" type="search" placeholder="이름 검색" value="${esc(q)}"></div>
     <div class="teamfilter">
@@ -881,7 +987,7 @@ function renderMembers() {
       return `<button class="mem-item${m.active ? '' : ' off'}" data-member-edit="${m.id}">
         <div class="avatar">${esc(initial(m.name))}</div>
         <div class="nm"><b>${esc(m.name)}${m.birthYear ? ` <span class="agebadge">${ageOf(m.birthYear)}세</span>` : ''}${m.active ? '' : ' <span class="chip">비활동</span>'}</b>
-          <div class="sub">${teamDot(m.team)}${m.gender ? `<span class="chip g${m.gender === '여' ? 'f' : 'm'}">${m.gender}</span>` : ''}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}${womanWarn(m)}</div>
+          <div class="sub">${teamDot(m.team)}${coachBadge(m.id)}${m.gender ? `<span class="chip g${m.gender === '여' ? 'f' : 'm'}">${m.gender}</span>` : ''}${stars(m.skill)} <span class="chip pos">${esc(m.pos)}</span>${m.gk ? '<span class="chip gk">GK</span>' : ''}${womanWarn(m)}</div>
         </div>
         <div class="rate">${st.rate != null ? st.rate + '%' : '–'}<small>${st.present}/${st.total}회</small></div>
       </button>`;
@@ -998,7 +1104,8 @@ function memberModal(existing) {
              value="${m0.birthYear || ''}" placeholder="예: 90 또는 1990" autocomplete="off">
       <div class="hint" id="birth-hint">${m0.birthYear ? esc(ageLabel(m0.birthYear)) : '2자리로 넣으면 자동으로 19xx/20xx 를 맞춥니다'}</div>
     </div>
-    <div class="field"><label>실력 (1~5)</label>
+    <div class="field"><label>실력 (1~5) <span class="labelhint">평가: 팀 감독</span></label>
+      ${existing && existing.skillUpdatedAt ? `<div class="hint">마지막 평가 ${esc(fmtWhen(existing.skillUpdatedAt))} · ${esc(whoLabel(existing.skillUpdatedBy))}</div>` : ''}
       <div class="skillpick" id="f-skill">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-s="${n}" aria-pressed="${m0.skill === n}">${n}</button>`).join('')}</div>
     </div>
     <div class="field"><label>선호 포지션</label>
@@ -1018,7 +1125,7 @@ function memberModal(existing) {
     </div>
     <div class="abil-sec" id="f-abil-sec">
       <button type="button" class="abil-head" id="f-abil-toggle" aria-expanded="true">
-        <b>간단 체크</b><span class="dim" id="f-abil-sum">${abilAvg(m0.abil) ? `평균 ${abilAvg(m0.abil)}` : '미입력'}</span><span class="caret">▾</span>
+        <b>간단 체크</b><span class="labelhint">평가: 팀 감독</span><span class="dim" id="f-abil-sum">${abilAvg(m0.abil) ? `평균 ${abilAvg(m0.abil)}` : '미입력'}</span><span class="caret">▾</span>
       </button>
       <div class="abil-body" id="f-abil-body">
         ${ABILITIES.map((a) => `<div class="abil-row" data-abil="${a.key}">
@@ -1115,7 +1222,13 @@ function memberModal(existing) {
       const birthYear = parseBirthYear(birthRaw);
       if (birthRaw && !birthYear) { toast('출생년도를 확인해 주세요 (예: 90 또는 1990)', 'err'); return; }
       const data = { name, skill, pos, team, birthYear, abil, gender, gk: $('#f-gk', m).getAttribute('aria-pressed') === 'true', active: $('#f-active', m).getAttribute('aria-pressed') === 'true' };
-      if (existing) { store.members.update(existing.id, data); toast('수정했습니다'); }
+      if (existing) {
+        const now = new Date().toISOString();
+        if (existing.skill !== data.skill) { data.skillUpdatedAt = now; data.skillUpdatedBy = 'owner'; }
+        if (JSON.stringify(existing.abil) !== JSON.stringify(data.abil)) { data.abilUpdatedAt = now; data.abilUpdatedBy = 'owner'; }
+        store.members.update(existing.id, data);
+        toast('수정했습니다');
+      }
       else { store.members.add(data); toast(`${name} 님 추가`); }
       closeModal(); render();
     });
@@ -1416,10 +1529,11 @@ async function exportTeamsPNG() {
       const ry = y + 66 + 48 + j * rowH;
       x.fillStyle = '#241f1a';
       x.font = '700 30px -apple-system, Malgun Gothic, sans-serif';
-      x.fillText(`${j + 1}. ${p.name}`, 80, ry);
+      const label = `${j + 1}. ${p.name}${store.club.coachTeamOf(p.id) ? ' (감독)' : ''}`;
+      x.fillText(label, 80, ry);
       if (p.gk) {
         x.fillStyle = colors[i];
-        const w = x.measureText(`${j + 1}. ${p.name}`).width;
+        const w = x.measureText(label).width;
         roundRect(x, 92 + w, ry - 24, 52, 30, 8); x.fill();
         x.fillStyle = '#fff'; x.font = '900 18px -apple-system, sans-serif';
         x.fillText('GK', 104 + w, ry - 3);
@@ -1658,6 +1772,36 @@ function bindEvents() {
     if (t.closest('#btn-add-member')) return memberModal(null);
     if (t.closest('#btn-bulk-member')) return bulkModal();
     if (t.closest('#btn-toggle-inactive')) { ui.showInactive = !ui.showInactive; return renderMembers(); }
+    if (t.closest('#btn-coach-mode')) { ui.coachMode = true; ui.coachOpen = null; return renderMembers(); }
+    if (t.closest('#btn-coach-exit')) { ui.coachMode = false; return renderMembers(); }
+    if (t.closest('#btn-team-names-3')) return teamNameModal();
+    const ct = t.closest('#coach-team [data-ct]');
+    if (ct) { ui.coachTeam = ct.dataset.ct; ui.coachOpen = null; return renderMembers(); }
+    const copen = t.closest('[data-copen]');
+    if (copen) { ui.coachOpen = ui.coachOpen === copen.dataset.copen ? null : copen.dataset.copen; return renderMembers(); }
+    const sdot = t.closest('[data-skill] .dot');
+    if (sdot) {
+      const id = sdot.closest('[data-skill]').dataset.skill;
+      const v = Number(sdot.dataset.v);
+      store.members.setSkill(id, v, 'owner');
+      const row = sdot.closest('.crow');
+      $$('[data-skill] .dot', row).forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.v) <= v)));
+      const meta = $('.who .meta', row);
+      if (meta) meta.innerHTML = meta.innerHTML.replace(/· (미평가|[^·]*(운영자|감독)[^·]*)$/, `· ${fmtWhen(new Date().toISOString())} 운영자`);
+      ui.teamPlan = null;
+      return;
+    }
+    const cab = t.closest('[data-cabil] .dot, [data-cabil] .clr');
+    if (cab) {
+      const [id, akey] = cab.closest('[data-cabil]').dataset.cabil.split(':');
+      const v = Number(cab.dataset.v);
+      const cur = store.members.byId(id)?.abil?.[akey] ?? null;
+      const next = v === 0 || cur === v ? null : v;
+      store.members.setAbil(id, { [akey]: next }, 'owner');
+      const row = cab.closest('[data-cabil]');
+      $$('.dot', row).forEach((b) => b.setAttribute('aria-pressed', String(next != null && Number(b.dataset.v) <= next)));
+      return;
+    }
     if (t.closest('#btn-sort')) { ui.memberSort = ui.memberSort === 'age' ? 'name' : 'age'; return renderMembers(); }
     const mt = t.closest('.teamfilter [data-mt]');
     if (mt) { ui.memberTeam = mt.dataset.mt; return renderMembers(); }

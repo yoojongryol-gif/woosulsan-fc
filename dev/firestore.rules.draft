@@ -1,0 +1,85 @@
+// 웃을산 FC — Firestore 보안 규칙 **초안** (배포 아님, 3단계 회원 배포 대비 메모)
+// 현재 앱은 localStorage 단독으로 돌아가며 이 파일은 코드로 쓰이지 않는다.
+// 권한 3등급: 운영자(owner) / 감독(coach) / 회원(member)  — dev/DATA_MODEL.md §9 표와 짝.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function club(clubId) { return get(/databases/$(db)/documents/clubs/$(clubId)).data; }
+
+    // 운영자: 클럽 문서의 adminUids 에 포함
+    function isOwner(clubId) {
+      return signedIn() && request.auth.uid in club(clubId).adminUids;
+    }
+    // 회원 문서와 로그인 사용자 연결 (members/{id}.uid)
+    function memberDoc(clubId, memberId) {
+      return get(/databases/$(db)/documents/clubs/$(clubId)/members/$(memberId)).data;
+    }
+    function isSelf(clubId, memberId) {
+      return signedIn() && memberDoc(clubId, memberId).uid == request.auth.uid;
+    }
+    // 감독: 클럽 문서 coaches 맵의 값(memberId)에 해당하는 회원의 uid
+    function coachTeam(clubId) {
+      return club(clubId).coaches;  // { A: memberId, B: ... }
+    }
+    function isCoachOfTeam(clubId, teamKey) {
+      return signedIn()
+        && coachTeam(clubId)[teamKey] != null
+        && memberDoc(clubId, coachTeam(clubId)[teamKey]).uid == request.auth.uid;
+    }
+    // 바뀐 필드만 추려서 허용 목록과 비교
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function onlyFields(allowed) { return changed().hasOnly(allowed); }
+
+    match /clubs/{clubId} {
+      allow read: if signedIn();
+      // 팀 이름·혼성팀·감독 지정·고정 토글은 운영자만
+      allow update: if isOwner(clubId);
+      allow create, delete: if isOwner(clubId);
+
+      match /members/{memberId} {
+        allow read: if signedIn();
+        allow create, delete: if isOwner(clubId);
+
+        allow update: if isOwner(clubId)
+          // 감독: 자기 팀 선수의 평가 필드만 (skill·abil + 평가 메타)
+          || (isCoachOfTeam(clubId, resource.data.team)
+              && request.resource.data.team == resource.data.team
+              && onlyFields(['skill', 'abil', 'skillUpdatedAt', 'skillUpdatedBy', 'abilUpdatedAt', 'abilUpdatedBy'])
+              && request.resource.data.skillUpdatedBy == 'coach:' + resource.data.team)
+          // 회원 본인: 프로필 일부만 (실력·소속·활동여부는 못 바꿈)
+          || (isSelf(clubId, memberId)
+              && onlyFields(['birthYear', 'gender', 'pos', 'selfAbil']));
+      }
+
+      match /matches/{matchId} {
+        allow read: if signedIn();
+        allow create, delete: if isOwner(clubId);
+        // 팀 확정·상태 변경은 운영자, 감독은 출석 대리 체크까지
+        allow update: if isOwner(clubId)
+          || (isCoachOfAny(clubId) && onlyFields(['attendance']));
+
+        match /tactics/{tacticId} {
+          allow read: if signedIn();
+          allow write: if isOwner(clubId) || isCoachOfAny(clubId);
+        }
+      }
+    }
+
+    function isCoachOfAny(clubId) {
+      return isCoachOfTeam(clubId, 'A') || isCoachOfTeam(clubId, 'B')
+          || isCoachOfTeam(clubId, 'C') || isCoachOfTeam(clubId, 'D');
+    }
+  }
+}
+
+/* 남은 숙제 (3단계에서 결정할 것)
+ * 1) members/{id}.uid 연결 방법 — 초대 링크 + 명단에서 본인 이름 선택(기기 기억) 후 익명 uid 저장.
+ * 2) 회원 자기평가는 selfAbil 로 분리 저장하고, 감독/운영자의 abil 과 합치지 않는다(덮어쓰기 분쟁 방지).
+ * 3) 감독이 다른 팀으로 이적하면 클럽 문서의 coaches 를 운영자가 갱신할 때까지 이전 팀 권한이 유지된다 —
+ *    앱에서는 노란 안내로 표시(코드 구현됨), rules 는 coaches 맵 기준이라 자동으로 옛 팀을 가리킨다.
+ * 4) get() 호출이 규칙당 여러 번 일어나므로(읽기 과금), 클럽 문서를 작게 유지하거나
+ *    custom claims(운영자/감독 uid)를 쓰는 쪽이 저렴하다.
+ */

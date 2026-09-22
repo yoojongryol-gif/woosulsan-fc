@@ -568,3 +568,37 @@ main {
 @media (prefers-color-scheme: dark) {
   .chip.gf, .chip.mixed { color: #e79bc2; }
 }
+
+/* ---------- v0.5.1 감독 ---------- */
+.chip.coach { background: color-mix(in srgb, var(--gold) 20%, transparent); color: var(--gold); border-color: transparent; }
+.chip.coach.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.tstat .coachline { font-weight: 700; color: var(--text-2); }
+.pcard .cb { font-size: 11px; }
+.labelhint { float: right; font-size: 10.5px; font-weight: 700; color: var(--text-3); }
+
+.coach-head { margin-bottom: 10px; }
+.coach-head .t { font-size: 16px; font-weight: 900; letter-spacing: -.02em; }
+.coach-head .s { font-size: 12.5px; color: var(--text-2); margin-top: 3px; line-height: 1.5; }
+.coach-sub { font-size: 12.5px; font-weight: 700; color: var(--text-2); margin: 10px 2px; }
+
+.crow { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.crow.open { border-color: var(--accent); }
+.crow .line { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 13px; }
+.crow .who { flex: 1; min-width: 0; }
+.crow .who b { font-size: 14.5px; font-weight: 800; }
+.crow .who .meta { font-size: 11px; color: var(--text-3); font-weight: 600; margin-top: 2px; }
+.crow .dots { display: flex; gap: 4px; flex: 0 0 auto; }
+.crow .dots .dot {
+  width: 38px; height: 38px; flex: 0 0 38px; border-radius: 50%; padding: 0;
+  border: 2px solid var(--line-strong); background: var(--surface-2); transition: background .12s, transform .1s;
+}
+.crow .dots .dot:active { transform: scale(.9); }
+.crow .dots .dot[aria-pressed="true"] { background: var(--gold); border-color: transparent; }
+.crow .more { width: 30px; height: 38px; color: var(--text-3); font-size: 14px; flex: 0 0 30px; }
+.crow .detail { padding: 4px 13px 12px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.crow .detail .abil-row .dot[aria-pressed="true"] { background: var(--accent); }
+.crow .detail .hint { font-size: 11.5px; color: var(--text-3); font-weight: 600; margin-top: 8px; }
+@media (max-width: 380px) {
+  .crow .dots .dot { width: 34px; height: 34px; flex-basis: 34px; }
+  .crow .line { padding-left: 10px; gap: 6px; }
+}

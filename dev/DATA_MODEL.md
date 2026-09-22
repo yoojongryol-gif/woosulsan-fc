@@ -1,4 +1,4 @@
-# 웃을산 FC 데이터 모델 (schema 2, v0.5.0)
+# 웃을산 FC 데이터 모델 (schema 2, v0.5.1)
 
 저장은 `store.js` 어댑터 한 곳을 통해서만 이루어진다. 지금은 `LocalStorageAdapter`(키 `woosulsan-fc:v1`),
 나중에 같은 인터페이스(`load()` / `save(state)` / `clear()`)를 가진 `FirestoreAdapter` 로 갈아끼우면 화면 코드는 그대로다.
@@ -12,7 +12,8 @@
     "name": "웃을산 FC",
     "teamNames": { "A": "A팀", "B": "번개", "C": "C팀", "D": "D팀" },  // 고정 소속 팀 4개 이름(편집 가능)
     "mixedTeams": ["D"],      // 혼성팀(여성 회원 소속) 키 목록, 1개 이상 가능
-    "lockWomen": true         // 여성 회원 혼성팀 고정 (기본 ON, 팀 탭 토글)
+    "lockWomen": true,        // 여성 회원 혼성팀 고정 (기본 ON, 팀 탭 토글)
+    "coaches": { "A": "m_x1", "B": null, "C": null, "D": null }  // 팀별 감독 memberId (감독의 단일 출처)
   },
   "members": [ /* Member */ ],
   "matches": [ /* Match */ ],
@@ -34,6 +35,8 @@
 | `birthYear` | number \| null | 출생년도(선택). 2자리 입력은 `parseBirthYear()` 가 19xx/20xx 로 보정 — 20xx 로 봐서 15세 이상이면 20xx, 아니면 19xx(19xx 가 100세 초과면 다시 20xx). 표시는 **연 나이 = 올해 - 출생년도**("90년생 · 36세") |
 | `abil` | object | **간단 체크 6항목** — `{speed, stamina, basic, shoot, defense, physical}`, 각 1~5 또는 `null`(미입력). 순서·이름 고정(`ABILITIES`). 팀 밸런스·합치기 점수에는 **쓰지 않는다**(종합 `skill` 만 사용). 폼의 "세부 평균으로 종합 실력 채우기" 버튼이 평균을 반올림해 `skill` 에 넣어 준다(자동 아님) |
 | `gender` | `남`\|`여`\|`null` | 성별(선택). 일괄 추가에서 `이영희 92 여` 처럼 출생년도와 순서 무관하게 파싱(`남/여/M/F`). 여성 회원은 혼성팀 고정 규칙의 대상 |
+| `skillUpdatedAt` / `skillUpdatedBy` | string \| null | 종합 실력을 **누가 언제** 고쳤는지. 지금은 `owner` 고정, 3단계에서 `coach:<팀키>` 가 들어간다 |
+| `abilUpdatedAt` / `abilUpdatedBy` | string \| null | 간단 체크 6항목의 평가 메타 (같은 규칙) |
 | `active` | boolean | 비활동 회원은 출석·팀 배분에서 제외 |
 | `createdAt` | ISO string | |
 
@@ -93,6 +96,8 @@ AI 설정은 `state` 에 **넣지 않는다**. localStorage 의 **다른 키**(`
 - `member.birthYear` 없으면 `null`(미입력). 잘못된 값도 `null` 로 정규화된다.
 - `member.abil` 없으면 6항목 모두 `null`. 1~5 밖의 값·문자도 `null` 로 정규화된다(`normalizeAbil`).
 - `member.gender` 없으면 `null`. `club.mixedTeams` 없으면 `[]`, `club.lockWomen` 없으면 `true`(기본 ON).
+- `club.coaches` 없으면 `{A:null,B:null,C:null,D:null}`. 회원을 삭제하면 그 회원이 맡던 감독 자리는 자동으로 비워진다.
+- 감독은 **회원 문서에 role 을 두지 않는다**. `club.coaches` 가 단일 출처이고, 화면의 감독 뱃지는 여기서 파생된다.
 - `club.teamNames` 없으면 기본값 `A팀~D팀`.
 - `match.teamCount` 가 범위를 벗어나면 2, `teamPlan` 없으면 `null`(옛 `teams` 는 merge 로 간주해 라벨만 `1조…`로 표시).
 - `teamPlan.labels` 없으면 `[]` (라벨 없으면 `groups` 로 이름 생성).
@@ -135,3 +140,32 @@ clubs/{clubId}                    name, teamNames{A..D}, adminUids[]
   - AI 프롬프트에 혼성팀·성별·고정 규칙을 함께 전달.
 - 토글 OFF 면 성별을 전혀 보지 않는다. 수동 탭 스왑은 항상 자유.
 - PNG 공유 이미지·전술 핀에는 성별을 표시하지 않는다.
+
+## 9. 권한 3등급 (3단계 Firestore rules 근거)
+
+지금(1~2단계)은 사장님 혼자 쓰는 단독 앱이라 모든 편집이 운영자 권한이다.
+아래 표는 회원 배포(3단계) 때 적용할 설계이며, 규칙 초안은 `dev/firestore.rules.draft` 에 있다.
+
+| 대상 | 운영자(owner) | 감독(coach, 자기 팀만) | 회원(member, 본인만) |
+|---|---|---|---|
+| 회원 추가·삭제·이름 | O | X | X |
+| 소속 팀(`team`) | O | X | X |
+| 종합 실력(`skill`) | O | **O** (자기 팀 선수) | X |
+| 간단 체크(`abil`) | O | **O** (자기 팀 선수) | 자기평가는 `selfAbil` 로 분리 |
+| 출생년도·성별·선호 포지션 | O | X | **O** (본인) |
+| GK 가능·활동 여부 | O | X | X |
+| 출석 체크 | O | **O** (자기 팀 대리 체크) | **O** (본인 참석/불참) |
+| 경기 생성·팀 확정 | O | X | X |
+| 전술판 | O | **O** | 읽기만 |
+| 팀 이름·혼성팀·감독 지정 | O | X | X |
+
+- 감독 평가에는 `skillUpdatedBy: "coach:<팀키>"` 가 남는다(누가 고쳤는지 추적).
+- 감독이 다른 팀으로 이적하면 `club.coaches` 는 그대로이므로 앱이 노란 안내를 띄우고, 운영자가 팀·감독 설정에서 정리한다.
+- 회원 자기평가(`selfAbil`)는 감독·운영자 평가(`abil`)와 **다른 필드**로 저장해 덮어쓰기 분쟁을 막는다(3단계 구현 예정).
+
+## 10. 감독 평가 화면 (v0.5.1)
+
+회원 탭 → "🎽 감독 평가 화면". 팀을 고르면 그 팀 선수만 세로로 나열되고,
+각 행의 점 1~5 를 누르면 **폼을 열지 않고** 종합 실력이 즉시 저장된다(평가 메타 자동 기록).
+행을 펼치면 간단 체크 6항목도 같은 방식으로 입력할 수 있다.
+사장님이 감독에게 폰을 건네거나, 감독 말을 들으며 빠르게 채우는 용도(로그인은 3단계).

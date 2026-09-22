@@ -18,7 +18,8 @@
 | `ai.js` | AI 기능 (Anthropic Messages API 브라우저 직접 호출) |
 | `roster.js` | 카톡 명단 붙여넣기 파서 · 회원 매칭 |
 | `sw.js` | 서비스워커 — network-first + 버전 스탬프 캐시명 |
-| `dev/DATA_MODEL.md` | 데이터 모델 (Firestore 이관 대비) |
+| `dev/DATA_MODEL.md` | 데이터 모델 · 권한 3등급 (Firestore 이관 대비) |
+| `dev/firestore.rules.draft` | 3단계 보안 규칙 초안 (배포 아님) |
 
 ## 개발
 ```

@@ -155,5 +155,64 @@ console.log('\n[5] 마이그레이션 · JSON 왕복');
   ok('JSON 왕복 — 고정 OFF 도 보존', s4.club.lockWomen() === false);
 }
 
+console.log('\n[6] 감독 (v0.5.1)');
+{
+  const s5 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s5.init();
+  const a1 = s5.members.add({ name: 'A감독', team: 'A', skill: 3 });
+  const a2 = s5.members.add({ name: 'A선수', team: 'A', skill: 2 });
+  const b1 = s5.members.add({ name: 'B감독', team: 'B', skill: 4 });
+  ok('기본 감독 없음', s5.club.coach('A') === null && Object.values(s5.club.coaches()).every((v) => v === null));
+
+  s5.club.setCoach('A', a1.id);
+  s5.club.setCoach('B', b1.id);
+  ok('감독 지정', s5.club.coach('A') === a1.id && s5.club.coachTeamOf(b1.id) === 'B');
+  ok('감독 아닌 회원', s5.club.coachTeamOf(a2.id) === null);
+  ok('불일치 없음', s5.club.coachMismatches().length === 0);
+
+  s5.members.update(a1.id, { team: 'C' });
+  const mis = s5.club.coachMismatches();
+  ok('감독이 다른 팀으로 이동 → 안내', mis.length === 1 && mis[0].key === 'A' && mis[0].reason === 'moved', JSON.stringify(mis.map((x) => x.key + ':' + x.reason)));
+  s5.members.update(a1.id, { team: 'A' });
+  ok('되돌리면 안내 사라짐', s5.club.coachMismatches().length === 0);
+
+  s5.members.update(b1.id, { active: false });
+  ok('비활동 감독도 안내', s5.club.coachMismatches().some((x) => x.reason === 'inactive'));
+  s5.members.update(b1.id, { active: true });
+
+  s5.club.setCoach('A', null);
+  ok('감독 해제', s5.club.coach('A') === null);
+  s5.club.setCoach('A', a1.id);
+
+  // 평가 메타
+  const before = s5.members.byId(a2.id);
+  ok('평가 전 메타 없음', !before.skillUpdatedAt && !before.skillUpdatedBy);
+  s5.members.setSkill(a2.id, 5, 'coach:A');
+  const after = s5.members.byId(a2.id);
+  ok('감독 평가 → skill + 메타', after.skill === 5 && after.skillUpdatedBy === 'coach:A' && !!after.skillUpdatedAt);
+  s5.members.setAbil(a2.id, { speed: 4, defense: 2 }, 'coach:A');
+  const after2 = s5.members.byId(a2.id);
+  ok('간단 체크 평가 + 메타', after2.abil.speed === 4 && after2.abil.defense === 2 && after2.abilUpdatedBy === 'coach:A');
+  ok('setAbil 은 나머지 항목 유지', after2.abil.shoot === null);
+
+  // 감독 회원 삭제 → 자리 비움
+  s5.members.remove(a1.id);
+  ok('감독 회원 삭제 시 자리 비움', s5.club.coach('A') === null);
+
+  // JSON 왕복
+  s5.club.setCoach('B', b1.id);
+  const s6 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s6.init();
+  await s6.importJSON(s5.exportJSON());
+  ok('JSON 왕복 — 감독 보존', s6.club.coach('B') === b1.id);
+  ok('JSON 왕복 — 평가 메타 보존', s6.members.byId(a2.id)?.skillUpdatedBy === 'coach:A');
+
+  // 마이그레이션
+  const s7 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await s7.init();
+  await s7.importJSON(JSON.stringify({ members: [{ id: 'z', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
+  ok('옛 데이터 — 감독 없음·메타 없음', s7.club.coach('A') === null && s7.members.all()[0].skillUpdatedAt === null);
+}
+
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);
