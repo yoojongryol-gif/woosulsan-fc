@@ -18,14 +18,14 @@ const { createStore, LocalStorageAdapter, TEAM_KEYS, ageOf, ageLabel, parseBirth
   ABILITIES, abilAvg, GENDERS, parseGender, parseMemberLine, splitNamePosition, analyzeMemberName,
   effectiveSkill, isUnrated, DEFAULT_TEAM_ALIASES, MODULE_VERSION: STORE_VERSION,
   RUBRIC_GENDERS, rubricKeyFor, weightedSkill, MIXED_FACTOR_MIN, MIXED_FACTOR_MAX,
-  TESTS, testForAbil, parseTestInput, formatTestValue, SQUAD_SIZES } = STORE_NS;
+  TESTS, testForAbil, parseTestInput, formatTestValue, SQUAD_SIZES, localDateStr } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage, recommendGroups } = BALANCE_NS;
 
-export const APP_VERSION = 'v0.6.1';
+export const APP_VERSION = 'v0.6.2';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -58,7 +58,7 @@ const ui = {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
-function todayStr() { return new Date().toISOString().slice(0, 10); }
+function todayStr() { return localDateStr(); }   // v0.6.2: UTC 아님 — 기기(한국) 날짜
 function fmtDate(d) {
   const [y, m, day] = String(d).split('-').map(Number);
   if (!y) return d;
@@ -70,7 +70,7 @@ function nextWeekday(target = 4) { // 기본 목요일
   const d = new Date();
   const diff = (target - d.getDay() + 7) % 7 || 7;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+  return localDateStr(d);
 }
 /* ---------- 평가 기준표 (v0.6.0) ----------
  * 사장님 2026-09-22: "남자와 여자 기준이 달라야 되는데 기준을 잡아놓고 평가를 해야 될 듯"

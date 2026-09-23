@@ -8,7 +8,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.6.1';
+export const MODULE_VERSION = 'v0.6.2';
 
 export const DRAFT_PREFIX = 'woosulsan-fc:draft:';
 export const DRAFT_TTL_MS = 3 * 24 * 60 * 60 * 1000;   // 3일 지난 초안은 버린다

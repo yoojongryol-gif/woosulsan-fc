@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.6.1';
+export const MODULE_VERSION = 'v0.6.2';
 
 export const SCHEMA_VERSION = 2;
 
@@ -430,6 +430,19 @@ export function emptyState() {
 }
 
 /** 연 나이 = 올해 - 출생년도 (만 나이 아님) */
+/**
+ * 기기 시간대 기준 "YYYY-MM-DD" (v0.6.2)
+ * toISOString().slice(0,10) 은 UTC 라 한국 새벽 0~9시에는 전날(연초엔 전년도)로 잡혔다.
+ * 날짜만 필요한 곳(오늘·경기 날짜·파일명)은 전부 이것을 쓴다. 측정일·수정시각 같은 순간은 ISO 그대로.
+ */
+export function localDateStr(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function ageOf(birthYear, now = new Date()) {
   if (!birthYear) return null;
   return now.getFullYear() - Number(birthYear);
@@ -657,7 +670,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
   function normalizeMatch(x) {
     return {
       id: x.id || uid('g'),
-      date: x.date || new Date().toISOString().slice(0, 10),
+      date: x.date || localDateStr(),
       time: x.time || '20:00',
       place: x.place || '',
       status: ['예정', '확정', '종료'].includes(x.status) ? x.status : '예정',
@@ -845,7 +858,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         return [...state.matches].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
       },
       upcoming() {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDateStr();   // 한국 새벽에도 오늘 경기가 '다가오는 경기'로 남도록 로컬 기준
         return [...state.matches]
           .filter((g) => g.date >= today && g.status !== '종료')
           .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
