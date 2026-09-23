@@ -1258,7 +1258,7 @@ function teamNameModal() {
     <div class="field"><label>클럽 이름 <span class="labelhint">공유 이미지 위에 찍히는 우리 모임 이름 (앱 이름과는 별개)</span></label>
       <input type="text" id="f-clubname" value="${esc(store.club.name())}" maxlength="20" placeholder="웃을산 FC"></div>
     <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:10px">
-      고정 소속 팀 4개입니다. <b>약자</b>는 일괄 추가에서 줄 맨 앞에 쓰는 1~2글자예요 — 예: <code>체 진혜린 95 여 포워드</code>.
+      고정 소속 팀 4개입니다. <b>약자</b>는 일괄 추가에서 줄 맨 앞에 쓰는 1~2글자예요 — 예: <code>체 한가람 95 여 포워드</code>.
     </div>
     ${TEAM_KEYS.map((k, i) => `<div class="field"><label>${i + 1}번째 팀</label>
       <div class="row" style="gap:6px">
@@ -1380,7 +1380,7 @@ function testRecOf(member, abilKey) {
 }
 
 /* ---------- 이름 정리 도구 (v0.5.6) ----------
- * 2026-09-22 사장님 실증: "분리하기" 를 눌러도 "체 진혜린" 처럼 앞 글자가 남았다.
+ * 2026-09-22 사장님 실증: "분리하기" 를 눌러도 "체 한가람" 처럼 앞 글자가 남았다.
  * 원인(로컬 재현): 앞선 버전이 포지션만 떼어 pos 를 지정해 둔 회원은, 새 도구에서
  *   "이미 포지션을 지정함 = 유지" 로 보고 체크박스가 꺼진 채 표시돼 적용에서 빠졌다.
  * → ① 이름 앞 팀 글자는 team·pos 설정 여부와 무관하게 "항상" 후보
@@ -1853,7 +1853,7 @@ function memberModal(existing) {
       }
       let name = $('#f-name', m).value.trim();
       if (!name) { toast('이름을 입력해 주세요', 'err'); return; }
-      // 이름 칸에 "진혜린 95 여 포워드" 처럼 통째로 넣은 경우도 갈라서 채운다
+      // 이름 칸에 "한가람 95 여 포워드" 처럼 통째로 넣은 경우도 갈라서 채운다
       const an = analyzeMemberName(name, { teamNames: teamNameMap(), teamAliases: aliasMap() });
       if (an.changed && an.name) {
         name = an.name;
@@ -1892,10 +1892,10 @@ function bulkModal() {
     <h3>회원 일괄 추가</h3>
     <div style="font-size:13px;color:var(--text-2);margin-bottom:10px;line-height:1.6">
       한 줄에 한 명씩 붙여넣으세요. <b>출생년도·성별·포지션</b>은 순서 상관없이 알아서 읽습니다.<br>
-      예: <code>교 진혜린 95 여 포워드</code>, <code>정성현 85 남 센터백</code>, <code>김알곡 GK</code><br>
+      예: <code>교 한가람 95 여 포워드</code>, <code>오태경 85 남 센터백</code>, <code>김단비 GK</code><br>
       줄 맨 앞 <b>팀 약자</b>(${TEAM_KEYS.map((k) => esc(aliasOf(k))).join('·')})를 쓰면 그 팀으로 들어갑니다. 실력은 기본 3.
     </div>
-    <textarea id="f-bulk" rows="7" placeholder="교 진혜린 95 여 포워드&#10;정성현 85 남 센터백&#10;김철수"></textarea>
+    <textarea id="f-bulk" rows="7" placeholder="교 한가람 95 여 포워드&#10;오태경 85 남 센터백&#10;김철수"></textarea>
     <div id="bulk-preview" class="bulkpv"></div>
     <div class="field" style="margin-top:12px"><label>줄에 팀이 없을 때 기본값</label>
       <div class="seg-wide" id="f-bteam">

@@ -226,7 +226,7 @@ export function clampMixedFactor(v) {
 }
 
 /* ---------------- 포지션 토큰 ----------------
- * 사장님이 실제로 붙여넣는 형식: "교 진혜린 95 여 포워드", "정지원 96 여 레프트 윙", "정성현 85 남 센터백"
+ * 사장님이 실제로 붙여넣는 형식: "교 한가람 95 여 포워드", "서보라 96 여 레프트 윙", "오태경 85 남 센터백"
  *  - 한 단어(포워드·미들·백·골키퍼)와 두 단어(레프트 윙·라이트 백·센터 백) 모두 인식
  *  - 레프트/라이트/센터/사이드는 수식어로 소비 (뒤 단어와 합쳐 판단)
  *  - 토큰이 "따로 떨어져 있을 때만" 인정 → "김수비" 같은 이름은 건드리지 않는다
@@ -307,7 +307,7 @@ export function analyzeMemberName(rawName, opts = {}) {
   let team = parsed.team || null;
   let glued = false;
 
-  // 약자가 공백 없이 붙은 경우: "체진혜린" → 체 + 진혜린 (확인 후 적용)
+  // 약자가 공백 없이 붙은 경우: "체한가람" → 체 + 한가람 (확인 후 적용)
   if (!team && /^[가-힣]{3,5}$/.test(raw)) {
     const aliases = opts.teamAliases || DEFAULT_TEAM_ALIASES;
     for (const k of TEAM_KEYS) {
@@ -334,7 +334,7 @@ export function splitNamePosition(rawName, opts = {}) {
   const tokens = String(rawName ?? '').split(/[\s,/()·|]+/).filter(Boolean);
   const nameParts = [];
   let pos = null; let gk = false; let team = null; const extras = [];
-  // 이름이 "체 진혜린" 처럼 팀 약자로 시작하면 떼어낸다
+  // 이름이 "체 한가람" 처럼 팀 약자로 시작하면 떼어낸다
   if (tokens.length > 1) {
     const hit = matchTeamToken(tokens[0], opts);
     if (hit) { team = hit; tokens.shift(); }
@@ -473,7 +473,7 @@ export function parseBirthYear(v, now = new Date()) {
 /**
  * 일괄 추가 한 줄 파싱.
  *   "홍길동" / "홍길동 90" / "김철수,1988" / "이영희 92 여"
- *   "교 진혜린 95 여 포워드" / "정지원 96 여 레프트 윙" / "정성현 85 남 센터백"
+ *   "교 한가람 95 여 포워드" / "서보라 96 여 레프트 윙" / "오태경 85 남 센터백"
  * 순서 무관. 줄 맨 앞의 팀 약자(팀 이름 첫 글자 또는 팀 이름 전체)는 team 으로 읽는다.
  * @param {string} line
  * @param {{teamNames?:Object}} opts  { A:'교역', B:'장년', ... } 형태면 약자 매칭에 쓴다
