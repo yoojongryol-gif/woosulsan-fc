@@ -25,7 +25,7 @@ const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBa
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage, recommendGroups } = BALANCE_NS;
 
-export const APP_VERSION = 'v0.6.0';
+export const APP_VERSION = 'v0.6.1';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -1859,6 +1859,9 @@ function memberModal(existing) {
         name = an.name;
         if (an.team && !team) team = an.team;
         if (an.pos) pos = an.pos;
+        // v0.6.1: 이름 칸에 "골키퍼" 를 넣으면 pos 만 GK 가 되고 GK 스위치는 꺼진 채 저장돼
+        // 팀 나누기에서 골키퍼 0명으로 세어졌다
+        if (an.gk || an.pos === 'GK') $('#f-gk', m).setAttribute('aria-pressed', 'true');
         if (an.gender && !gender) gender = an.gender;
         if (an.birthYear) $('#f-birth', m).value = String(an.birthYear);
       }
@@ -2029,7 +2032,9 @@ function rosterModal() {
     };
 
     const runParse = (text) => {
-      parsed = parseRoster(text);
+      parsed = parseRoster(text, {
+        parseLine: (ln) => parseMemberLine(ln, { teamNames: teamNameMap(), teamAliases: aliasMap() }),
+      });
       const members = store.members.all();
       rows = matchNames(parsed.in, members).map((r) => ({ ...r, pick: r.status === 'multi' && r.candidates.length === 1 ? r.candidates[0].id : null, add: false }));
       outRows = matchNames(parsed.out, members).filter((r) => r.status === 'matched');
@@ -2095,7 +2100,13 @@ function rosterModal() {
         for (const r of rows) {
           let id = r.memberId || r.pick;
           if (!id && r.status === 'none' && r.add) {
-            id = store.members.add({ name: r.input }).id;
+            // v0.6.1: 명단 줄에서 읽은 포지션·성별·나이·팀을 함께 넣는다
+            const inf = parsed.info?.[r.input] || {};
+            id = store.members.add({
+              name: r.input,
+              pos: inf.pos || 'MF', gk: !!inf.gk || inf.pos === 'GK',
+              gender: inf.gender || null, birthYear: inf.birthYear || null, team: inf.team || null,
+            }).id;
             added += 1;
           }
           if (id) { map[id] = 'in'; inCount += 1; }

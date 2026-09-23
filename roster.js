@@ -3,7 +3,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.6.0';
+export const MODULE_VERSION = 'v0.6.1';
 
 const SECTION_IN = /(참석|참가|참여|가능|오케이|ok|출석|^o$|^⭕|^✅)/i;
 const SECTION_OUT = /(불참|못\s*감|못감|안\s*됨|불가|취소|^x$|^❌)/i;
@@ -47,8 +47,9 @@ export function looksLikeName(s) {
  * - 한 줄 안에 "1. 홍길동 2. 김철수" 처럼 번호가 여럿이면 나눠 읽는다
  * - 쉼표·슬래시·가운뎃점으로도 나눈다
  */
-export function parseRoster(text, { defaultSection = 'in' } = {}) {
-  const out = { in: [], out: [], maybe: [] };
+export function parseRoster(text, { defaultSection = 'in', parseLine = null } = {}) {
+  // info[이름] = { pos, gk, gender, birthYear, team } — 새 회원으로 추가할 때 그대로 쓴다 (v0.6.1)
+  const out = { in: [], out: [], maybe: [], info: {} };
   const seen = { in: new Set(), out: new Set(), maybe: new Set() };
   let section = defaultSection;
 
@@ -97,12 +98,34 @@ export function parseRoster(text, { defaultSection = 'in' } = {}) {
     }
 
     for (const part of parts) {
-      const name = cleanToken(part);
-      if (!name || !looksLikeName(name)) continue;
+      let name = cleanToken(part);
+      if (!name) continue;
+      // v0.6.1: "한가람 95 여 포워드" 처럼 이름 뒤에 정보가 붙은 줄도 이름만 떼어 읽는다.
+      // 예전에는 이런 줄이 "이름 같지 않다" 로 통째로 버려져 출석 체크에서 빠졌다.
+      let info = null;
+      if (!looksLikeName(name) && typeof parseLine === 'function') {
+        const r = parseLine(name);
+        if (r && r.name && looksLikeName(r.name)) {
+          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null, team: r.team || null };
+          name = r.name;
+        }
+      } else if (typeof parseLine === 'function') {
+        // 이름처럼 보여도 팀 약자·포지션이 섞였을 수 있다 ("청 김철수", "김철수 GK")
+        const r = parseLine(name);
+        // "홍길동,85,골키퍼" 를 쉼표로 쪼개면 "골키퍼" 만 남는다 — 정보 단어뿐인 조각은 사람이 아니다
+        if (r && !r.name && (r.pos || r.gender || r.birthYear || r.team)) continue;
+        if (r && r.name && r.name !== name && looksLikeName(r.name)
+          && (r.pos || r.team || r.gender || r.birthYear)) {
+          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null, team: r.team || null };
+          name = r.name;
+        }
+      }
+      if (!looksLikeName(name)) continue;
       const key = name.replace(/\s/g, '');
       if (seen[lineSection].has(key)) continue;
       seen[lineSection].add(key);
       out[lineSection].push(name);
+      if (info) out.info[name] = info;
     }
   }
   return out;

@@ -16,7 +16,8 @@ const { createStore, parseMemberLine, parseGender } = await import('../store.js'
 const { balanceTeams, suggestMerges, groupStat } = await import('../balance.js');
 
 console.log('\n[1] 붙여넣기 파서');
-const P = (t) => parseRoster(t);
+// v0.6.1: 결과에 info(이름별 포지션 등)가 추가돼, 목록 비교는 세 구간만 본다
+const P = (t) => { const r = parseRoster(t); return { in: r.in, out: r.out, maybe: r.maybe }; };
 ok('① 카톡 투표 복붙', JSON.stringify(P('✅ 참석 (3)\n홍길동\n김철수\n이영희\n\n❌ 불참 (1)\n박민수'))
   === JSON.stringify({ in: ['홍길동', '김철수', '이영희'], out: ['박민수'], maybe: [] }));
 ok('② 번호 한 줄', P('1. 홍길동 2. 김철수 3. 이영희').in.join() === '홍길동,김철수,이영희');
@@ -214,5 +215,53 @@ console.log('\n[6] 감독 (v0.5.1)');
   ok('옛 데이터 — 감독 없음·메타 없음', s7.club.coach('A') === null && s7.members.all()[0].skillUpdatedAt === null);
 }
 
+
+console.log('\n[v0.6.1] 명단 줄에 포지션·나이가 붙어 있어도 읽는다 (라이브 실측 재현, 가명)');
+{
+  const TN = { A: '교역', B: '장년', C: '청년', D: '체육' };
+  const TA = { A: '교', B: '장', C: '청', D: '체' };
+  const PL = (ln) => parseMemberLine(ln, { teamNames: TN, teamAliases: TA });
+  const text = [
+    '1. 한가람 포워드',
+    '2. 윤다솜 87 여 미들',
+    '3. 홍길동(골키퍼)',
+    '4. 청 김철수 GK',
+    '5. 서보라 레프트 윙',
+    '6. 배준호 83 윙백',
+    '7. 한별 오른쪽 윙',
+  ].join('\n');
+  const before = parseRoster(text);
+  ok('수리 전 방식(파서 미주입)은 대부분 버림 — 재현', before.in.length <= 2, before.in.join(','));
+  const r = parseRoster(text, { parseLine: PL });
+  ok('7줄 모두 이름으로 읽음', r.in.length === 7, r.in.join(','));
+  ok('이름만 남음', r.in.join(',') === '한가람,윤다솜,홍길동,김철수,서보라,배준호,한별', r.in.join(','));
+  ok('포지션 정보 보존', r.info['한가람']?.pos === 'FW' && r.info['윤다솜']?.pos === 'MF'
+    && r.info['서보라']?.pos === 'FW' && r.info['배준호']?.pos === 'DF' && r.info['한별']?.pos === 'FW',
+    JSON.stringify(r.info));
+  ok('GK 는 gk 표시까지', r.info['김철수']?.gk === true && r.info['김철수']?.pos === 'GK');
+  ok('팀 약자 보존', r.info['김철수']?.team === 'C');
+  ok('나이·성별 보존', r.info['윤다솜']?.birthYear === 1987 && r.info['윤다솜']?.gender === '여');
+  ok('괄호 안 포지션은 괄호 제거 규칙대로 이름만', r.in.includes('홍길동'));
+
+  // 섹션·O/X 와 함께
+  const r2 = parseRoster('참석\n한가람 포워드\n윤다솜 미들 O\n불참\n서보라 레프트 윙', { parseLine: PL });
+  ok('섹션과 함께', r2.in.join(',') === '한가람,윤다솜' && r2.out.join(',') === '서보라', JSON.stringify({ in: r2.in, out: r2.out }));
+
+  // 문장·잡음은 여전히 걸러진다
+  const r3 = parseRoster('이번주 경기 명단입니다\n저 늦게 가요 공격 할게요\n한가람 포워드', { parseLine: PL });
+  ok('안내 문장은 무시', r3.in.join(',') === '한가람', r3.in.join(','));
+
+  // 쉼표로 쪼갠 조각이 정보 단어뿐이면 사람으로 세지 않는다
+  const r4 = parseRoster('홍길동,85,골키퍼\n김철수, 미들\n이영희/여', { parseLine: PL });
+  ok('정보 조각은 사람 아님 (골키퍼·미들·여)', r4.in.join(',') === '홍길동,김철수,이영희', r4.in.join(','));
+
+  // 기존 회원과 매칭
+  const st = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
+  await st.init();
+  ['한가람', '윤다솜', '홍길동', '김철수'].forEach((n) => st.members.add({ name: n }));
+  const mm = matchNames(r.in, st.members.all());
+  ok('기존 회원 4명 매칭', mm.filter((x) => x.status === 'matched').length === 4, mm.map((x) => x.input + ':' + x.status).join(' '));
+  ok('새 회원 3명은 none', mm.filter((x) => x.status === 'none').length === 3);
+}
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);
