@@ -25,7 +25,7 @@ const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBa
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 const { balanceTeams, groupStat, suggestMerges, suggestGroupCount, teamShortage, recommendGroups } = BALANCE_NS;
 
-export const APP_VERSION = 'v0.6.2';
+export const APP_VERSION = 'v0.6.3';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 /** 고정 소속 팀 A~D 색 */
@@ -724,20 +724,43 @@ function pasteImportSheet() {
       다른 곳에서 "클립보드 복사"한 내용을 그대로 붙여넣으세요. 파일이 있으면 아래 "파일 고르기"를 쓰면 됩니다.
     </div>
     <textarea id="f-paste" rows="7" placeholder='{"app":"축구&amp;joy", ...}'></textarea>
+    <div class="pastemeta" id="f-paste-meta">아직 비어 있습니다</div>
     <div class="row" style="margin-top:8px">
       <button class="btn grow" data-act="file">파일 고르기</button>
       <button class="btn grow primary" data-act="go">가져오기</button>
     </div>
     <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    // 붙여넣은 양과 끝 모양을 바로 보여 준다 (아이폰에서 복사가 중간에 잘리는 경우를 눈으로 확인)
+    const meta = () => {
+      const v = $('#f-paste', m).value;
+      const box = $('#f-paste-meta', m);
+      if (!box) return;
+      const t = v.trim();
+      if (!t) { box.textContent = '아직 비어 있습니다'; box.className = 'pastemeta'; return; }
+      const endOk = /[}\]]$/.test(t.replace(/```\s*$/, '').trim());
+      const startOk = /^[\s\uFEFF]*(```[a-z]*\s*)?[{[]/.test(v);
+      box.innerHTML = `${v.length.toLocaleString()}자 · 시작 ${startOk ? '{ 확인' : '<b>{ 로 시작하지 않음</b>'} · 끝 ${endOk ? '} 확인' : '<b>} 로 끝나지 않음 — 복사가 잘렸을 수 있어요</b>'}`;
+      box.className = `pastemeta${startOk && endOk ? ' ok' : ' warn'}`;
+    };
+    $('#f-paste', m).addEventListener('input', meta);
     m.addEventListener('click', async (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'close') return closeModal();
       if (act === 'file') { afterModalClose(() => $('#file-import').click()); return; }
       if (act === 'go') {
-        const text = $('#f-paste', m).value.trim();
-        if (!text) { toast('내용을 붙여넣어 주세요', 'err'); return; }
-        afterModalClose(() => importText(text));   // 닫기 → 가져오기 방식 확인 모달
+        const text = $('#f-paste', m).value;
+        if (!text.trim()) { toast('내용을 붙여넣어 주세요', 'err'); return; }
+        // 먼저 읽어 보고, 안 되면 이 시트에 그대로 머물며 이유를 보여 준다
+        let pv;
+        try { pv = store.previewImport(text); }
+        catch (err) {
+          const box = $('#f-paste-meta', m);
+          if (box) { box.textContent = err.message; box.className = 'pastemeta err'; }
+          toast('가져오지 못했습니다 — 아래 이유를 확인해 주세요', 'err');
+          return;
+        }
+        afterModalClose(() => importChoice(text, pv));
       }
     });
   });
@@ -1592,11 +1615,12 @@ function renderMembers() {
         <button class="btn grow" id="btn-export">JSON 내보내기</button>
         <button class="btn grow" id="btn-import">JSON 가져오기</button>
       </div>
-      <button class="btn block" id="btn-paste-import" style="margin-bottom:8px">붙여넣어 가져오기</button>
+      <button class="btn block" id="btn-paste-import" style="margin-bottom:8px">붙여넣어 가져오기 (JSON)</button>
+      <button class="btn block" id="btn-text-import" style="margin-bottom:8px">명단 텍스트로 가져오기</button>
       <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름 정리 (팀 글자·포지션 분리)</button>
       <button class="btn block" id="btn-team-names-2" style="margin-bottom:8px">팀 이름 바꾸기</button>
       <button class="btn block" id="btn-rubric" style="margin-bottom:8px">평가 기준표 (남/여)</button>
-      <input type="file" id="file-import" accept="application/json,.json" class="hidden">
+      <input type="file" id="file-import" accept=".json,application/json,text/plain,*/*" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
         데이터는 이 기기(브라우저)에만 저장됩니다. 기기를 바꾸거나 백업하려면 JSON으로 내보내 두세요.
       </div>
@@ -2304,24 +2328,126 @@ function exportJSON() {
 }
 
 async function importJSONFile(file) {
-  const text = await file.text();
-  return importText(text);
+  let text = '';
+  try { text = await file.text(); }
+  catch (e) { return importErrorSheet(`파일을 읽지 못했습니다 (${file?.name || '이름 없음'})`); }
+  return importText(text, file?.name);
+}
+/** 가져오기 실패 이유를 오래 보이게 (토스트는 금방 사라진다) */
+function importErrorSheet(msg, fileName) {
+  openModal(`<h3>가져오지 못했습니다</h3>
+    ${fileName ? `<div class="hint" style="margin-bottom:6px">파일: ${esc(fileName)}</div>` : ''}
+    <div class="importerr">${esc(msg)}</div>
+    <div class="hint" style="margin-top:10px">다른 기기의 <b>회원 탭 → 다른 곳으로 옮기기 → 클립보드 복사</b> 로 다시 복사하거나,
+      명단만 옮길 거라면 <b>설정 → 명단 텍스트로 가져오기</b> 를 써 보세요.</div>
+    <div class="foot"><button class="btn primary" data-act="close">확인</button></div>`, (m) => {
+    m.addEventListener('click', (e) => { if (e.target.closest('[data-act="close"]')) closeModal(); });
+  });
 }
 
-async function importText(text) {
-  const merge = await confirmDialog({
-    title: '가져오기 방식',
-    body: '<b>합치기</b>는 지금 데이터에 없는 회원·경기만 추가합니다.<br><b>덮어쓰기</b>는 현재 데이터를 모두 지우고 파일 내용으로 교체합니다.',
-    ok: '합치기',
+async function importText(text, fileName) {
+  let pv;
+  try { pv = store.previewImport(text); }
+  catch (e) { return importErrorSheet(e.message || '가져오기 실패', fileName); }
+  return importChoice(text, pv);
+}
+/**
+ * 가져오기 방식 고르기 (v0.6.3)
+ * 예전 창은 [취소]/[합치기] 두 버튼이었는데 "취소"가 실제로는 **덮어쓰기**로 동작했다.
+ * → 합치기가 기본. 전체 교체는 따로 누르고 한 번 더 확인해야 한다. 그냥 닫으면 아무 일도 없다.
+ */
+function importChoice(text, pv) {
+  openModal(`<h3>가져오기</h3>
+    <div class="impsum">
+      <div><b>${pv.total}명</b><span>가져올 명단</span></div>
+      <div><b>${pv.fresh}명</b><span>새로 추가</span></div>
+      <div><b>${pv.existing}명</b><span>이미 있음 · 빈 칸만 채움</span></div>
+    </div>
+    <div class="hint" style="margin:8px 0 12px">지금 이 기기의 회원 ${pv.current}명·팀 이름·기준표는 그대로 둡니다.
+      같은 이름은 새로 만들지 않고 비어 있는 출생년도·성별·팀·포지션만 채워요.${pv.fixed?.length ? `<br>자동으로 고친 것: ${esc(pv.fixed.join(', '))}` : ''}</div>
+    <button class="btn primary block" data-act="merge">합치기 (권장)</button>
+    <button class="btn ghost block" data-act="replace" style="margin-top:8px;color:var(--danger)">전체 교체…</button>
+    <div class="foot"><button class="btn ghost" data-act="close">취소</button></div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'merge') { closeModal(); return runImport(text, true); }
+      if (act === 'replace') {
+        closeModal();
+        const n = store.members.all().length;
+        const okGo = await confirmDialog({
+          title: `지금 회원 ${n}명이 전부 지워집니다`,
+          body: `이 기기의 회원·경기·전술·설정을 모두 지우고 가져온 내용(회원 ${pv.total}명)으로 바꿉니다. 되돌릴 수 없어요.<br>
+            직접 입력해 둔 회원이 있다면 <b>합치기</b>를 쓰세요.`,
+          ok: '전부 지우고 교체', danger: true,
+        });
+        if (okGo) runImport(text, false);
+      }
+    });
   });
+}
+async function runImport(text, merge) {
   try {
     const r = await store.importJSON(text, { merge });
-    toast(`가져오기 완료 · 회원 ${r.members}명 / 경기 ${r.matches}건`);
+    toast(importResultLine(r));
     ui.teamPlan = null;
     render();
   } catch (e) {
-    toast(e.message || '가져오기 실패', 'err');
+    importErrorSheet(e.message || '가져오기 실패');
   }
+}
+/** "신규 3 · 보강 2 · 건너뜀 14 (교역 5 · 장년 4 · …)" */
+function importResultLine(r) {
+  const teams = [...TEAM_KEYS, 'none']
+    .filter((k) => r.byTeam?.[k])
+    .map((k) => `${k === 'none' ? '미배정' : teamName(k)} ${r.byTeam[k]}`).join(' · ');
+  return `신규 ${r.added} · 보강 ${r.filled} · 건너뜀 ${r.skipped}${teams ? ` (${teams})` : ''}`;
+}
+
+/** 설정 → 명단 텍스트로 가져오기 (v0.6.3) — 일괄 추가와 같은 줄 형식, 팀별 이동 없이 한 번에 */
+function textImportSheet() {
+  openModal(`<h3>명단 텍스트로 가져오기</h3>
+    <div class="hint" style="margin-bottom:8px">한 줄에 한 명. 줄 맨 앞에 팀(약자 <b>${TEAM_KEYS.map((k) => esc(aliasOf(k))).join('·')}</b> 또는 팀 이름)을 쓰면 그 팀으로 들어갑니다.<br>
+      예: <code>청년 홍길동 03 남 왼쪽풀백</code> · <code>체 한가람 95 여 포워드</code><br>
+      이미 있는 이름은 새로 만들지 않고 빈 칸만 채웁니다.</div>
+    <textarea id="f-timport" rows="9" placeholder="청년 홍길동 03 남 왼쪽풀백&#10;청년 김철수 01 남 골키퍼"></textarea>
+    <div class="pastemeta" id="f-timport-meta">아직 비어 있습니다</div>
+    <div class="foot">
+      <button class="btn ghost" data-act="close">취소</button>
+      <button class="btn primary" data-act="go">가져오기</button>
+    </div>`, (m) => {
+    const draft = bindDraft(m, 'text-import', '#f-timport');
+    const lines = () => $('#f-timport', m).value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const meta = () => {
+      const ls = lines();
+      const box = $('#f-timport-meta', m);
+      if (!ls.length) { box.textContent = '아직 비어 있습니다'; box.className = 'pastemeta'; return; }
+      const names = new Set(store.members.all().map((x) => x.name.trim()));
+      const opts = { teamNames: teamNameMap(), teamAliases: aliasMap() };
+      let fresh = 0; let dup = 0; let bad = 0;
+      for (const l of ls) { const r = parseMemberLine(l, opts); if (!r?.name) bad += 1; else if (names.has(r.name)) dup += 1; else fresh += 1; }
+      box.innerHTML = `${ls.length}줄 · 새로 <b>${fresh}</b> · 이미 있음 ${dup}${bad ? ` · <b>이름 없음 ${bad}</b>` : ''}`;
+      box.className = 'pastemeta ok';
+    };
+    $('#f-timport', m).addEventListener('input', meta);
+    meta();
+    m.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'go') {
+        const ls = lines();
+        if (!ls.length) { toast('명단을 붙여넣어 주세요', 'err'); return; }
+        const r = store.importLines(ls, { teamNames: teamNameMap(), teamAliases: aliasMap() });
+        draft?.clear();
+        closeModal();
+        toast(importResultLine(r) + (r.bad ? ` · 이름 없는 줄 ${r.bad}` : ''));
+        ui.teamPlan = null;
+        render();
+      }
+    });
+  });
 }
 
 /* ================= 이벤트 ================= */
@@ -2564,6 +2690,7 @@ function bindEvents() {
     const envh = t.closest('[data-envhelp]');
     if (envh) return envHelpSheet(envh.dataset.envhelp);
     if (t.closest('#btn-import')) return $('#file-import').click();
+    if (t.closest('#btn-text-import')) return textImportSheet();
     if (t.closest('#btn-reset')) {
       if (!await confirmDialog({ title: '전체 데이터를 지울까요?', body: '회원·경기·출석·전술이 모두 삭제됩니다. 되돌릴 수 없습니다.', ok: '다음', danger: true })) return;
       if (!await confirmDialog({ title: '정말 삭제합니다', body: '먼저 JSON 내보내기로 백업했는지 확인하세요.', ok: '삭제', danger: true })) return;
@@ -2592,7 +2719,7 @@ function bindEvents() {
       return renderMembers();
     }
     if (e.target.id === 'team-match') { ui.teamMatchId = e.target.value; ui.teamPlan = null; ui.groupCount = null; ui.teamSel = null; renderTeam(); }
-    if (e.target.id === 'file-import' && e.target.files[0]) { importJSONFile(e.target.files[0]); e.target.value = ''; }
+    if (e.target.id === 'file-import' && e.target.files[0]) { const fl = e.target.files[0]; e.target.value = ''; importJSONFile(fl); }
   });
 
   document.addEventListener('input', (e) => {

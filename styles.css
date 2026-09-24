@@ -745,3 +745,16 @@ a.btn { text-decoration: none; }
 .pcard.bench{opacity:.72;border-style:dashed}
 .pcard .mv{margin-left:auto;font-size:12px;font-weight:800;color:var(--text-2);
   padding:2px 5px;border-radius:7px;background:var(--line)}
+
+
+/* ================= v0.6.3 — 가져오기 ================= */
+.pastemeta{margin-top:6px;font-size:12px;color:var(--text-2);line-height:1.5;word-break:break-all}
+.pastemeta.ok{color:var(--accent)}
+.pastemeta.warn{color:#8a6414}
+.pastemeta.err{color:var(--danger);background:rgba(200,60,50,.06);border:1px solid rgba(200,60,50,.2);border-radius:10px;padding:8px 10px}
+.importerr{font-size:13px;line-height:1.6;color:var(--danger);background:rgba(200,60,50,.06);
+  border:1px solid rgba(200,60,50,.2);border-radius:12px;padding:10px 12px;word-break:break-all;user-select:text}
+.impsum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+.impsum>div{border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center;background:var(--card)}
+.impsum b{display:block;font-size:18px;font-weight:800}
+.impsum span{display:block;font-size:11px;color:var(--text-2);margin-top:2px;line-height:1.35}

@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.6.2';
+export const MODULE_VERSION = 'v0.6.3';
 
 export const SCHEMA_VERSION = 2;
 
@@ -250,6 +250,9 @@ export const POS_MODIFIERS = ['레프트', '라이트', '센터', '사이드', '
 
 const normTok = (t) => String(t ?? '').trim().toLowerCase().replace(/[.\-_]/g, '');
 
+/** 붙여 쓸 수 있는 수식어 (두 글자 이상만 — 한 글자 "우·좌" 는 성씨일 수 있어 떼지 않는다) */
+const GLUED_MODIFIERS = POS_MODIFIERS.map(normTok).filter((m) => m.length >= 2).sort((a, b) => b.length - a.length);
+
 /** 토큰 1개 → { pos, gk } (아니면 null) */
 export function parsePositionToken(tok) {
   const t = normTok(tok);
@@ -257,8 +260,19 @@ export function parsePositionToken(tok) {
   for (const [pos, list] of Object.entries(POS_TOKENS)) {
     if (list.some((x) => normTok(x) === t)) return { pos, gk: pos === 'GK' };
   }
+  // v0.6.3: "왼쪽풀백"·"오른쪽윙"·"우측수비" 처럼 수식어를 붙여 쓴 경우
+  for (const mod of GLUED_MODIFIERS) {
+    if (t.length > mod.length && t.startsWith(mod)) {
+      const rest = t.slice(mod.length);
+      for (const [pos, list] of Object.entries(POS_TOKENS)) {
+        if (list.some((x) => normTok(x) === rest)) return { pos, gk: pos === 'GK' };
+      }
+    }
+  }
   return null;
 }
+/** 쉼표·슬래시·괄호 경계 표시 (그 너머와는 두 단어 포지션으로 합치지 않는다) */
+export const TOKEN_SEP = '\u0000';
 
 /**
  * tokens[i] 부터 포지션을 읽는다 (두 단어 우선).
@@ -266,7 +280,9 @@ export function parsePositionToken(tok) {
  */
 export function matchPositionAt(tokens, i) {
   const a = tokens[i];
-  const b = tokens[i + 1];
+  if (a === TOKEN_SEP) return { pos: null, gk: false, consumed: 1 };
+  // "왼쪽 윙,백" 의 "윙" 과 "백" 은 쉼표로 갈라져 있으니 윙백으로 합치지 않는다
+  const b = tokens[i + 1] === TOKEN_SEP ? undefined : tokens[i + 1];
   if (b) {
     const joined = parsePositionToken(normTok(a) + normTok(b));   // "레프트"+"윙" → 레프트윙
     if (joined) return { ...joined, consumed: 2 };
@@ -337,7 +353,7 @@ export function splitNamePosition(rawName, opts = {}) {
   // 이름이 "체 한가람" 처럼 팀 약자로 시작하면 떼어낸다
   if (tokens.length > 1) {
     const hit = matchTeamToken(tokens[0], opts);
-    if (hit) { team = hit; tokens.shift(); }
+    if (hit) { team = hit; tokens.shift(); if (tokens[0] === TOKEN_SEP) tokens.shift(); }
   }
   for (let i = 0; i < tokens.length; i += 1) {
     const hit = matchPositionAt(tokens, i);
@@ -430,6 +446,119 @@ export function emptyState() {
 }
 
 /** 연 나이 = 올해 - 출생년도 (만 나이 아님) */
+/* ---------------- 백업 JSON 읽기 (v0.6.3) ----------------
+ * 2026-09-23 사장님(아이폰 홈화면 앱) "명단 JSON 가져오기가 안 됨".
+ * 라이브 실측: 스마트 따옴표(“ ”)나 채팅 앱이 끼워 넣는 제로폭 문자·NBSP 가 섞이면
+ * "JSON 형식이 아닙니다." 한 줄만 뜨고 실패했다. 어디가 문제인지도 알 수 없었다.
+ */
+const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+/** 붙여넣은 글에서 안전하게 걷어낼 수 있는 것만 걷어낸다 (따옴표 모양은 건드리지 않음) */
+export function cleanJSONText(raw) {
+  let t = String(raw ?? '');
+  t = t.replace(ZERO_WIDTH, '');                  // BOM · 제로폭 · 소프트 하이픈
+  t = t.replace(/[\u00A0\u2007\u202F\u3000]/g, ' ');   // NBSP · 전각 공백 → 공백
+  t = t.replace(/\r\n?/g, '\n').trim();
+  t = t.replace(/^```[a-zA-Z]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();   // 코드펜스
+  // "백업입니다: {...} 감사합니다" 처럼 앞뒤에 말이 붙어 있으면 바깥 { } 만 남긴다
+  const a = t.indexOf('{'); const b = t.lastIndexOf('}');
+  if (a > 0 && b > a) t = t.slice(a, b + 1);
+  else if (a > 0 && b < 0) t = t.slice(a);
+  return t;
+}
+/** 문법 자리의 스마트 따옴표를 곧은 따옴표로 (엄격 파싱이 실패했을 때만 쓴다) */
+export function straightenQuotes(t) {
+  return String(t ?? '').replace(/[\u201C\u201D\u201E\u201F\u2033\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
+}
+/** JSON 문법이 처음 어긋나는 위치 (정상이면 -1). 브라우저마다 오류 문구가 달라 직접 찾는다. */
+export function jsonErrorAt(src) {
+  const s = String(src ?? ''); const n = s.length; let i = 0;
+  const WS = ' \t\n\r';
+  const ws = () => { while (i < n && WS.includes(s[i])) i += 1; };
+  const fail = () => { throw i; };
+  const str = () => {
+    i += 1;
+    while (i < n) {
+      const c = s[i];
+      if (c === '"') { i += 1; return; }
+      if (c === '\\') { i += 2; continue; }
+      if (c < ' ') fail();
+      i += 1;
+    }
+    fail();
+  };
+  const value = () => {
+    ws();
+    const c = s[i];
+    if (c === '{') {
+      i += 1; ws();
+      if (s[i] === '}') { i += 1; return; }
+      for (;;) {
+        ws(); if (s[i] !== '"') fail();
+        str(); ws(); if (s[i] !== ':') fail();
+        i += 1; value(); ws();
+        if (s[i] === ',') { i += 1; continue; }
+        if (s[i] === '}') { i += 1; return; }
+        fail();
+      }
+    }
+    if (c === '[') {
+      i += 1; ws();
+      if (s[i] === ']') { i += 1; return; }
+      for (;;) {
+        value(); ws();
+        if (s[i] === ',') { i += 1; continue; }
+        if (s[i] === ']') { i += 1; return; }
+        fail();
+      }
+    }
+    if (c === '"') { str(); return; }
+    const m = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/.exec(s.slice(i, i + 64));
+    if (m && m[0]) { i += m[0].length; return; }
+    for (const lit of ['true', 'false', 'null']) if (s.startsWith(lit, i)) { i += lit.length; return; }
+    fail();
+  };
+  try { value(); ws(); if (i < n) fail(); return -1; } catch (e) { if (typeof e === 'number') return Math.min(e, n); throw e; }
+}
+/** 사람이 읽을 오류 문구 */
+function jsonErrorMessage(t) {
+  const at = jsonErrorAt(t);
+  if (at < 0) return 'JSON 형식이 아닙니다.';
+  if (at >= t.length) {
+    return `JSON 이 중간에 끊겼습니다 (${t.length}자까지 받음 · 끝이 "${t.slice(-20)}"). 처음부터 끝까지 다시 복사해 주세요.`;
+  }
+  const before = t.slice(Math.max(0, at - 20), at);
+  const ch = t[at];
+  const after = t.slice(at + 1, at + 21);
+  const code = ch.charCodeAt(0);
+  const what = code > 126 ? ` · 문제 글자 U+${code.toString(16).toUpperCase().padStart(4, '0')}` : '';
+  return `JSON 형식이 아닙니다 (${at + 1}자 근처: …${before}▶${ch}◀${after}…${what})`;
+}
+/**
+ * 붙여넣은 글 → 백업 데이터. 실패하면 위치가 담긴 오류를 던진다.
+ * @returns {{data, fixed:string[]}}  fixed = 자동으로 고친 것들
+ */
+export function parseBackupText(raw) {
+  const fixed = [];
+  const original = String(raw ?? '');
+  let t = cleanJSONText(original);
+  if (t !== original.trim()) fixed.push('보이지 않는 문자·앞뒤 글');
+  if (!t) throw new Error('내용이 비어 있습니다.');
+  let parsed;
+  try { parsed = JSON.parse(t); }
+  catch (e1) {
+    const t2 = straightenQuotes(t);
+    try { parsed = JSON.parse(t2); fixed.push('스마트 따옴표'); t = t2; }
+    catch (e2) { throw new Error(jsonErrorMessage(t2)); }
+  }
+  const data = parsed?.data && Array.isArray(parsed.data.members) ? parsed.data
+    : Array.isArray(parsed?.members) ? parsed : null;
+  if (!data) {
+    const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed) : [];
+    throw new Error(`회원 목록(members)이 없는 파일입니다${keys.length ? ` (있는 항목: ${keys.slice(0, 8).join(', ')})` : ''}.`);
+  }
+  return { data, fixed };
+}
+
 /**
  * 기기 시간대 기준 "YYYY-MM-DD" (v0.6.2)
  * toISOString().slice(0,10) 은 UTC 라 한국 새벽 0~9시에는 전날(연초엔 전년도)로 잡혔다.
@@ -494,7 +623,14 @@ export function parseBirthYear(v, now = new Date()) {
 export function parseMemberLine(line, opts = {}) {
   const raw = String(line ?? '').trim();
   if (!raw) return null;
-  const tokens = raw.split(/[\s,/()·|\t]+/).filter(Boolean);
+  // v0.6.3: 쉼표·슬래시·괄호 경계를 기억한다 ("왼쪽 윙,백" → 윙 / 백 따로, "미드,센터백" → 미드 먼저)
+  const tokens = [];
+  for (const seg of raw.split(/[,/()·|]+/)) {
+    const words = seg.split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    if (tokens.length) tokens.push(TOKEN_SEP);
+    tokens.push(...words);
+  }
 
   const nameParts = [];
   let birthYear = null; let gender = null; let pos = null; let gk = false; let team = null;
@@ -502,20 +638,21 @@ export function parseMemberLine(line, opts = {}) {
 
   // 줄 맨 앞 팀 약자 ("체" / "체육" / "D")
   let unknownTeam = null;
-  if (tokens.length > 1) {
+  if (tokens.filter((x) => x !== TOKEN_SEP).length > 1) {
     const t0 = String(tokens[0]).trim();
     const hit = matchTeamToken(t0, opts);
     if (hit) { team = hit; tokens.shift(); }
     else if (t0.length === 1 && !/^\d+$/.test(t0) && !parseGender(t0) && !parsePositionToken(t0)) {
       // 한 글자인데 어느 팀도 아닌 토큰: 성(姓)이면 이름으로 두고("홍 길동"), 아니면 빼고 알려 준다.
       // 두 글자 이상은 이름일 가능성이 커서 절대 건드리지 않는다("한별 95 남 골키퍼").
-      const restHasName = tokens.slice(1).some((x) => x.length >= 2 && !/^\d+$/.test(x) && !parsePositionToken(x));
-      if (restHasName && !COMMON_SURNAMES.has(t0)) { unknownTeam = t0; tokens.shift(); }
+      const restHasName = tokens.slice(1).some((x) => x !== TOKEN_SEP && x.length >= 2 && !/^\d+$/.test(x) && !parsePositionToken(x));
+      if (restHasName && !COMMON_SURNAMES.has(t0)) { unknownTeam = t0; tokens.shift(); if (tokens[0] === TOKEN_SEP) tokens.shift(); }
     }
   }
 
   for (let i = 0; i < tokens.length; i += 1) {
     const tok = tokens[i];
+    if (tok === TOKEN_SEP) continue;
     if (birthYear == null && /^(\d{2}|\d{4})$/.test(tok)) {
       const y = parseBirthYear(tok);
       if (y) { birthYear = y; continue; }
@@ -1114,25 +1251,108 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       // app 필드는 표기용일 뿐이다 — importJSON 은 이 값을 보지 않으므로 옛 "웃을산 FC" 백업도 그대로 들어온다
       return JSON.stringify({ app: '축구&joy', exportedAt: new Date().toISOString(), data: state }, null, 2);
     },
+    /** 가져오기 전에 무엇이 바뀔지 미리 센다 (저장 안 함) */
+    previewImport(text) {
+      const { data, fixed } = parseBackupText(text);
+      const next = migrate(data);
+      const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
+      let fresh = 0; let existing = 0;
+      for (const m of next.members) (byName.has(m.name.trim()) ? existing += 1 : fresh += 1);
+      return { total: next.members.length, fresh, existing, matches: next.matches.length, fixed, current: state.members.length };
+    },
+    /**
+     * 백업 가져오기 (v0.6.3)
+     *  - merge(기본으로 쓰는 쪽): 이름이 같은 회원은 그대로 두고 빈 칸(출생년도·성별·팀·포지션)만 채운다.
+     *    처음 보는 회원·경기·전술만 추가. 클럽 설정(팀 이름·기준표 등)은 지금 것을 유지.
+     *  - merge:false = 전체 교체 (앱 화면에서는 2단계 확인을 거쳐야만 호출된다)
+     */
     async importJSON(text, { merge = false } = {}) {
-      let parsed;
-      try { parsed = JSON.parse(text); } catch (e) { throw new Error('JSON 형식이 아닙니다.'); }
-      const incoming = parsed?.data && parsed.data.members ? parsed.data : parsed;
-      if (!incoming || !Array.isArray(incoming.members)) throw new Error('회원 목록이 없는 파일입니다.');
+      const { data, fixed } = parseBackupText(text);
+      const next = migrate(data);
+      const stat = { added: 0, filled: 0, skipped: 0, fixed, byTeam: {} };
       if (!merge) {
-        state = migrate(incoming);
+        state = migrate(data);
+        stat.added = state.members.length;
       } else {
-        const next = migrate(incoming);
-        const names = new Set(state.members.map((m) => m.name));
-        for (const m of next.members) if (!names.has(m.name)) state.members.push(m);
+        const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
+        const usedIds = new Set(state.members.map((m) => m.id));
+        const idMap = new Map();   // 들어온 id → 이 기기 id (같은 이름이면 기존 회원으로 잇는다)
+        for (const inc of next.members) {
+          const cur = byName.get(inc.name.trim());
+          if (cur) {
+            idMap.set(inc.id, cur.id);
+            let changed = false;
+            if (cur.birthYear == null && inc.birthYear != null) { cur.birthYear = inc.birthYear; changed = true; }
+            if (!cur.gender && inc.gender) { cur.gender = inc.gender; changed = true; }
+            if (!cur.team && inc.team) { cur.team = inc.team; changed = true; }
+            // MF 는 입력하지 않았을 때의 기본값이라 빈 칸으로 본다
+            if ((!cur.pos || cur.pos === 'MF') && inc.pos && inc.pos !== 'MF') {
+              cur.pos = inc.pos; if (inc.pos === 'GK') cur.gk = true; changed = true;
+            }
+            if (changed) stat.filled += 1; else stat.skipped += 1;
+          } else {
+            const m = { ...inc };
+            if (usedIds.has(m.id)) m.id = uid('m');
+            usedIds.add(m.id);
+            idMap.set(inc.id, m.id);
+            state.members.push(m);
+            byName.set(m.name.trim(), m);
+            stat.added += 1;
+          }
+        }
+        const remap = (id) => idMap.get(id) || id;
         const ids = new Set(state.matches.map((g) => g.id));
-        for (const g of next.matches) if (!ids.has(g.id)) state.matches.push(g);
+        for (const g of next.matches) {
+          if (ids.has(g.id)) continue;
+          const att = {};
+          for (const [k, v] of Object.entries(g.attendance || {})) att[remap(k)] = v;
+          state.matches.push({ ...g, attendance: att, teams: (g.teams || []).map((t) => t.map(remap)) });
+        }
         const tids = new Set(state.tactics.map((t) => t.id));
-        for (const t of next.tactics) if (!tids.has(t.id)) state.tactics.push(t);
+        for (const t of next.tactics) {
+          if (tids.has(t.id)) continue;
+          state.tactics.push({ ...t, pins: (t.pins || []).map((pin) => ({ ...pin, memberId: remap(pin.memberId) })) });
+        }
       }
+      for (const m of state.members) { const k = m.team || 'none'; stat.byTeam[k] = (stat.byTeam[k] || 0) + 1; }
       await adapter.save(state);
       emit();
-      return { members: state.members.length, matches: state.matches.length };
+      return { members: state.members.length, matches: state.matches.length, ...stat };
+    },
+
+    /**
+     * 명단 텍스트 가져오기 (v0.6.3) — 일괄 추가와 같은 줄 형식을 통째로.
+     * 이미 있는 이름은 추가하지 않고, 빈 칸(출생년도·성별·팀·포지션)만 채운다.
+     */
+    importLines(lines, { teamNames = null, teamAliases = null } = {}) {
+      const tn = teamNames || state.club?.teamNames || null;
+      const ta = teamAliases || api.club.teamAliases();
+      const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
+      const stat = { added: 0, filled: 0, skipped: 0, bad: 0, byTeam: {} };
+      for (const raw of lines || []) {
+        const line = String(raw ?? '').trim();
+        if (!line) continue;
+        const r = parseMemberLine(line, { teamNames: tn, teamAliases: ta });
+        if (!r || !r.name) { stat.bad += 1; continue; }
+        const cur = byName.get(r.name.trim());
+        if (cur) {
+          let changed = false;
+          if (cur.birthYear == null && r.birthYear) { cur.birthYear = r.birthYear; changed = true; }
+          if (!cur.gender && r.gender) { cur.gender = r.gender; changed = true; }
+          if (!cur.team && r.team) { cur.team = r.team; changed = true; }
+          if ((!cur.pos || cur.pos === 'MF') && r.pos && r.pos !== 'MF') { cur.pos = r.pos; if (r.gk) cur.gk = true; changed = true; }
+          if (changed) stat.filled += 1; else stat.skipped += 1;
+          continue;
+        }
+        const m = normalizeMember({ name: r.name, birthYear: r.birthYear ?? null, gender: r.gender ?? null,
+          pos: r.pos || 'MF', gk: !!r.gk, team: r.team ?? null });
+        state.members.push(m);
+        byName.set(m.name.trim(), m);
+        stat.added += 1;
+      }
+      for (const m of state.members) { const k = m.team || 'none'; stat.byTeam[k] = (stat.byTeam[k] || 0) + 1; }
+      touch();
+      return stat;
     },
     async resetAll() {
       state = emptyState();

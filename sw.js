@@ -2,7 +2,7 @@
  * 원칙: network-first + 버전 스탬프 캐시명.
  * (cache-first + 고정 캐시명 = "옛 화면 고착" 사고 전례 → 금지)
  */
-const VERSION = 'v0.6.2';
+const VERSION = 'v0.6.3';
 const CACHE = `woosulsan-fc-${VERSION}`;
 const PRECACHE = [
   './', './index.html', './styles.css', './app.js', './store.js', './balance.js',
