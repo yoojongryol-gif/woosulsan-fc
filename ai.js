@@ -265,7 +265,7 @@ export function buildClubContext(store, { matchId = null, includeMembers = true 
       ctx.경기 = {
         날짜: g.date, 시간: g.time, 장소: g.place || '미정', 상태: g.status,
         참석자수: store.matches.attendees(g.id).length,
-        팀별참석: Object.fromEntries(['A', 'B', 'C', 'D'].map((k) => [store.club.teamName(k), att[k].map((m) => m.name)])),
+        팀별참석: Object.fromEntries(store.club.teamKeys().map((k) => [store.club.teamName(k), att[k].map((m) => m.name)])),
         미배정참석: att.none.map((m) => m.name),
       };
     }
@@ -280,7 +280,7 @@ export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
   const g = store.matches.byId(matchId);
   const att = store.matches.teamAttendance(matchId);
   const teams = {};
-  for (const k of ['A', 'B', 'C', 'D']) {
+  for (const k of store.club.teamKeys()) {   // v0.7.0: 팀 수 가변 (학생팀 포함)
     if (!att[k].length) continue;
     teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 성별: m.gender || null, 능력치: abilBrief(m) }));
   }

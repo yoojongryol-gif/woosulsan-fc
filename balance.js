@@ -31,10 +31,13 @@ function sum(list) { return list.reduce((a, p) => a + (Number(p.skill) || 0), 0)
  * @param {{seed?:number, iterations?:number}} opts
  * @returns {{teams: Array<Array>, stats: Array<{total:number,avg:number,gk:number,size:number}>, spread:number}}
  */
+/** 한 경기에서 나눌 수 있는 최대 팀 수 (소속 팀 최대 6개와 같다) */
+export const MAX_GROUPS = 6;
+
 export function balanceTeams(players, teamCount = 2, opts = {}) {
   const seed = opts.seed ?? (Date.now() ^ Math.floor(Math.random() * 1e9));
   const rnd = mulberry32(seed);
-  const tc = Math.max(2, Math.min(4, teamCount | 0));
+  const tc = Math.max(2, Math.min(MAX_GROUPS, teamCount | 0));   // v0.7.0: 최대 6팀
   const lock = opts.lock || {}; // { memberId: groupIndex }
   const pool = players.map((p) => ({
     id: p.id, name: p.name, gk: !!p.gk,
@@ -254,7 +257,7 @@ export function evenSplit(n, k) {
  * 참석 인원으로 오늘 팀 수를 권한다 (v0.6.0, 2026-09-22 사장님)
  *  - "경기 만들기에 팀 수를 미리 정할 수 없으니 참석 인원에 따라"
  *  - "축구 경기니 11대11이 기본 인원으로" → 팀당 기본 인원(base)을 기준으로 센다
- * 규칙: 권장 팀 수 = floor(참석 / base) 를 2~4 로 가둔다.
+ * 규칙: 권장 팀 수 = floor(참석 / base) 를 2 ~ (참석한 소속 팀 수, 최대 6) 로 가둔다.  (v0.7.0: 4 고정 해제)
  *   - 2×base 미만이면 2팀 + 몇 명 부족한지 알려 준다 (11명 기준 22명 미만)
  *   - 2×base ~ 3×base-1 이면 "2팀 + 교체 N명" 이 기본, "3팀 로테이션" 을 대안으로 제시
  *   - 3×base 이상 3팀, 4×base 이상 4팀
@@ -263,9 +266,8 @@ export function evenSplit(n, k) {
 export function recommendGroups(n, { base = 11, availableTeams = 4, teamSizes = [] } = {}) {
   const size = Math.max(0, Math.round(n) || 0);
   const b = Math.max(2, Math.round(base) || 11);
-  const cap = Math.max(2, Math.min(4, Math.round(availableTeams) || 4));
-  let count = Math.max(2, Math.min(4, Math.floor(size / b)));
-  count = Math.min(count, cap);
+  const cap = Math.max(2, Math.min(MAX_GROUPS, Math.round(availableTeams) || 4));
+  let count = Math.max(2, Math.min(cap, Math.floor(size / b)));
 
   const short = size < b * 2 ? b * 2 - size : 0;
   const bench = Math.max(0, size - count * b);
@@ -279,7 +281,7 @@ export function recommendGroups(n, { base = 11, availableTeams = 4, teamSizes = 
 
   // 대안: 2팀+교체가 많으면 한 팀 더 만들어 돌리는 편이 나을 수 있다
   const alts = [];
-  if (bench > 0 && count < 4 && count + 1 <= cap && size >= (count + 1) * Math.ceil(b * 0.6)) {
+  if (bench > 0 && count + 1 <= cap && size >= (count + 1) * Math.ceil(b * 0.6)) {
     alts.push({ count: count + 1, label: `${count + 1}팀 로테이션`, sizes: evenSplit(size, count + 1) });
   }
   return { count, sizes, bench, short, base: b, reason, alts };

@@ -758,3 +758,18 @@ a.btn { text-decoration: none; }
 .impsum>div{border:1px solid var(--line);border-radius:12px;padding:10px 8px;text-align:center;background:var(--card)}
 .impsum b{display:block;font-size:18px;font-weight:800}
 .impsum span{display:block;font-size:11px;color:var(--text-2);margin-top:2px;line-height:1.35}
+
+
+/* ================= v0.7.0 — 가변 팀 (학생팀 포함 5~6팀) ================= */
+.seg-wide { flex-wrap: wrap; }
+.seg-wide button { min-width: 52px; }
+.teamedit { border-left: 3px solid var(--c); padding-left: 10px; }
+.tehead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.tehead .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
+.tehead label { margin: 0; flex: 1; }
+.teops { display: flex; gap: 4px; }
+.teops .btn.sm { padding: 4px 9px; min-width: 0; }
+.teops .btn[disabled] { opacity: .35; }
+.team-grid > .tstat:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.hero .teamline { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.hero .tcell { min-width: 52px; }

@@ -5,17 +5,49 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v0.6.3';
+export const MODULE_VERSION = 'v0.7.0';
 
 export const SCHEMA_VERSION = 2;
 
-/** 고정 소속 팀 키 (회원은 이 중 하나에 소속되거나 미배정) */
-export const TEAM_KEYS = ['A', 'B', 'C', 'D'];
-export const DEFAULT_TEAM_NAMES = { A: '교역', B: '장년', C: '청년', D: '체육' };
+/* ---------------- 소속 팀 (v0.7.0: 2~6팀 가변) ----------------
+ * 사장님 2026-09-27 "축구앱에 학생팀도 추가해줘" → 4팀 고정을 풀고, 학생(E)을 기본으로 더한다.
+ * 키는 A~F 로 고정(데이터·백업 호환), "지금 쓰는 팀과 순서"는 club.teamOrder 가 정한다.
+ *
+ * TEAM_KEYS / TEAM_COLORS 는 **같은 배열 객체를 제자리에서 바꾸는** 살아 있는 목록이다.
+ * 여러 파일이 import 해 둔 참조가 그대로 최신 팀 목록을 보게 하려고 이렇게 한다(재할당 금지).
+ */
+export const ALL_TEAM_KEYS = ['A', 'B', 'C', 'D', 'E', 'F'];
+export const MIN_TEAMS = 2;
+export const MAX_TEAMS = ALL_TEAM_KEYS.length;
+export const DEFAULT_TEAM_ORDER = ['A', 'B', 'C', 'D', 'E'];
+export const DEFAULT_TEAM_NAMES = { A: '교역', B: '장년', C: '청년', D: '체육', E: '학생', F: '새 팀' };
 /** v0.5.3 까지 쓰던 기본 이름 — 사용자가 손대지 않았으면 새 기본값으로 올린다 */
 export const OLD_DEFAULT_TEAM_NAMES = { A: 'A팀', B: 'B팀', C: 'C팀', D: 'D팀' };
 /** 일괄 추가에서 줄 맨 앞에 쓰는 팀 약자 (1~2글자, 편집 가능) */
-export const DEFAULT_TEAM_ALIASES = { A: '교', B: '장', C: '청', D: '체' };
+export const DEFAULT_TEAM_ALIASES = { A: '교', B: '장', C: '청', D: '체', E: '학', F: '' };
+/** 팀 색은 키에 붙는다 — 순서를 바꿔도 팀마다 색이 그대로 */
+export const TEAM_COLOR_BY_KEY = { A: '#1f7a4d', B: '#2f5fa8', C: '#b4552a', D: '#6b4ea8', E: '#b8456f', F: '#23858c' };
+/** 지금 쓰는 팀 키 (살아 있는 배열) */
+export const TEAM_KEYS = [...DEFAULT_TEAM_ORDER];
+/** TEAM_KEYS 와 같은 순서의 팀 색 (살아 있는 배열) — 5팀 이상일 때 색이 모자라지 않게 */
+export const TEAM_COLORS = DEFAULT_TEAM_ORDER.map((k) => TEAM_COLOR_BY_KEY[k]);
+/** 팀 순서를 정리한다: 중복·모르는 키 제거, 2~6팀 */
+export function normalizeTeamOrder(raw) {
+  const seen = new Set();
+  const out = [];
+  for (const k of Array.isArray(raw) ? raw : []) {
+    if (ALL_TEAM_KEYS.includes(k) && !seen.has(k)) { seen.add(k); out.push(k); }
+  }
+  if (out.length < MIN_TEAMS) return [...DEFAULT_TEAM_ORDER];
+  return out.slice(0, MAX_TEAMS);
+}
+/** 살아 있는 목록을 제자리에서 바꾼다 */
+export function setActiveTeams(order) {
+  const keys = normalizeTeamOrder(order);
+  TEAM_KEYS.splice(0, TEAM_KEYS.length, ...keys);
+  TEAM_COLORS.splice(0, TEAM_COLORS.length, ...keys.map((k) => TEAM_COLOR_BY_KEY[k]));
+  return keys;
+}
 
 /** 흔한 한 글자 성 — 팀 약자로 못 읽은 토큰이 성이면 이름의 일부로 본다 ("홍 길동") */
 const COMMON_SURNAMES = new Set(('김이박최정강조윤장임한오서신권황안송전홍유고문양손배백허남심노하곽성차주우구민류나진지엄채원천방공현함변염여추도소石마길연위표명기반왕琴옥육印맹제모남궁탁국여진어은편구용').split(''));
@@ -37,7 +69,7 @@ export function matchTeamToken(token, { teamNames = null, teamAliases = null } =
   }
   const up = t.toUpperCase();
   if (TEAM_KEYS.includes(up)) return up;
-  if (/^[ABCD]팀$/.test(up)) return up[0];
+  if (/^[A-F]팀$/.test(up) && TEAM_KEYS.includes(up[0])) return up[0];
   return null;
 }
 
@@ -430,13 +462,14 @@ export function emptyState() {
     schema: SCHEMA_VERSION,
     club: {
       name: '웃을산 FC', teamNames: { ...DEFAULT_TEAM_NAMES },
+      teamOrder: [...DEFAULT_TEAM_ORDER],    // 지금 쓰는 팀과 순서 (v0.7.0, 2~6팀)
       teamAliases: { ...DEFAULT_TEAM_ALIASES },
       mixedTeams: ['D'], lockWomen: true,   // 체육(D)이 혼성팀 (사장님 확정)
       rubric: normalizeRubric(null),        // 남/여 평가 기준표 (v0.6.0)
       tests: normalizeTestThresholds(null), // 측정 경계값 (v0.6.0)
       mixedFactor: 1,                       // 혼성 환산 계수 — 1.0 = 끔
       squadSize: DEFAULT_SQUAD_SIZE,        // 팀당 기본 인원 (11대11)
-      coaches: { A: null, B: null, C: null, D: null }, // 팀별 감독 memberId (단일 출처)
+      coaches: Object.fromEntries(ALL_TEAM_KEYS.map((k) => [k, null])), // 팀별 감독 memberId (단일 출처)
     },
     members: [],
     matches: [],
@@ -740,18 +773,22 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     const savedNames = raw?.club?.teamNames || null;
     // v0.5.3 까지의 기본 이름(A팀~D팀)을 그대로 쓰고 있었다면 새 기본값(교역/장년/청년/체육)으로 올린다.
     const untouched = !savedNames
-      || TEAM_KEYS.every((k) => !savedNames[k] || savedNames[k] === OLD_DEFAULT_TEAM_NAMES[k]);
+      || ['A', 'B', 'C', 'D'].every((k) => !savedNames[k] || savedNames[k] === OLD_DEFAULT_TEAM_NAMES[k]);
     s.club.teamNames = untouched
       ? { ...DEFAULT_TEAM_NAMES }
       : Object.assign({ ...DEFAULT_TEAM_NAMES }, savedNames);
-    s.club.teamAliases = Object.fromEntries(TEAM_KEYS.map((k) => {
+    // v0.7.0: 팀 순서가 없는 옛 데이터(4팀)는 그대로 두고 학생(E)을 뒤에 붙인다 — 기존 팀·회원은 무손실
+    s.club.teamOrder = Array.isArray(raw?.club?.teamOrder)
+      ? normalizeTeamOrder(raw.club.teamOrder)
+      : [...DEFAULT_TEAM_ORDER];
+    s.club.teamAliases = Object.fromEntries(ALL_TEAM_KEYS.map((k) => {
       const v = raw?.club?.teamAliases?.[k];
       const clean = typeof v === 'string' ? v.trim().slice(0, 2) : '';
       return [k, clean || DEFAULT_TEAM_ALIASES[k]];
     }));
     // 혼성팀: 저장된 값이 없으면 체육(D)을 기본 혼성팀으로 (사장님 확정)
     s.club.mixedTeams = Array.isArray(raw?.club?.mixedTeams)
-      ? raw.club.mixedTeams.filter((k) => TEAM_KEYS.includes(k))
+      ? raw.club.mixedTeams.filter((k) => ALL_TEAM_KEYS.includes(k))
       : ['D'];
     if (untouched && !raw?.club?.mixedTeams?.length) s.club.mixedTeams = ['D'];
     s.club.lockWomen = raw?.club?.lockWomen !== false; // 기본 ON
@@ -760,7 +797,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.club.tests = normalizeTestThresholds(raw?.club?.tests);
     s.club.mixedFactor = clampMixedFactor(raw?.club?.mixedFactor ?? 1);
     s.club.squadSize = clampSquadSize(raw?.club?.squadSize ?? DEFAULT_SQUAD_SIZE);
-    s.club.coaches = Object.fromEntries(TEAM_KEYS.map((k) => {
+    s.club.coaches = Object.fromEntries(ALL_TEAM_KEYS.map((k) => {
       const v = raw?.club?.coaches?.[k];
       return [k, typeof v === 'string' && v ? v : null];
     }));
@@ -789,7 +826,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       skill: auto != null ? clampSkill(auto) : clampSkill(m.skill),
       gk: !!m.gk,
       pos: ['FW', 'MF', 'DF', 'GK'].includes(m.pos) ? m.pos : 'MF',
-      team: TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
+      team: ALL_TEAM_KEYS.includes(m.team) ? m.team : null, // 고정 소속 팀 (없으면 미배정)
       birthYear: parseBirthYear(m.birthYear), // 선택 입력 (없으면 null)
       abil,                                   // 간단 체크 6항목 (미입력은 null)
       tests: normalizeTests(m.tests),         // 측정 기록 (v0.6.0)
@@ -812,7 +849,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       place: x.place || '',
       status: ['예정', '확정', '종료'].includes(x.status) ? x.status : '예정',
       // v0.6.0: 팀 수는 "미정(null)" 이 기본 — 팀 탭에서 확정할 때 채워진다
-      teamCount: [2, 3, 4].includes(x.teamCount) ? x.teamCount : null,
+      teamCount: [2, 3, 4, 5, 6].includes(x.teamCount) ? x.teamCount : null,
       teams: Array.isArray(x.teams) ? x.teams : [],
       // 오늘의 팀 구성 방식: 고정 팀 합치기(merge) 또는 소속 무시 재배분(shuffle)
       teamPlan: x.teamPlan && typeof x.teamPlan === 'object'
@@ -838,6 +875,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     async init() {
       const raw = await adapter.load();
       state = migrate(raw);
+      setActiveTeams(state.club.teamOrder);
       emit();
       return state;
     },
@@ -1056,7 +1094,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         if (!g) return out;
         for (const m of state.members) {
           if (!m.active || g.attendance[m.id] !== 'in') continue;
-          (out[m.team] || out.none).push(m);
+          (out[m.team] || out.none).push(m);   // 없는 팀(삭제됨) 키는 미배정으로
         }
         return out;
       },
@@ -1110,6 +1148,54 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         touch();
       },
       teamName(key) { return state.club.teamNames?.[key] || DEFAULT_TEAM_NAMES[key] || key; },
+      /* ----- 팀 목록 (v0.7.0) ----- */
+      teamKeys() { return [...TEAM_KEYS]; },
+      teamColor(key) { return TEAM_COLOR_BY_KEY[key] || '#888'; },
+      /** 소속 회원 수 (비활동 포함) */
+      teamMemberCount(key) { return state.members.filter((m) => m.team === key).length; },
+      /** 팀 추가 — 비어 있는 키 중 첫 번째. 최대 6팀 */
+      addTeam(name, alias) {
+        const cur = normalizeTeamOrder(state.club.teamOrder);
+        if (cur.length >= MAX_TEAMS) return null;
+        const key = ALL_TEAM_KEYS.find((k) => !cur.includes(k));
+        const nm = String(name ?? '').trim().slice(0, 12) || DEFAULT_TEAM_NAMES[key];
+        state.club.teamNames = { ...(state.club.teamNames || {}), [key]: nm };
+        const al = String(alias ?? '').trim().slice(0, 2) || DEFAULT_TEAM_ALIASES[key] || nm[0];
+        state.club.teamAliases = { ...(state.club.teamAliases || {}), [key]: al };
+        state.club.coaches = { ...(state.club.coaches || {}), [key]: null };
+        state.club.teamOrder = [...cur, key];
+        setActiveTeams(state.club.teamOrder);
+        touch();
+        return key;
+      },
+      /**
+       * 팀 삭제 — 최소 2팀은 남긴다. 소속 회원은 미배정으로 옮긴다(화면에서 먼저 확인받음).
+       * @returns {{ok:boolean, moved:number, reason?:string}}
+       */
+      removeTeam(key) {
+        const cur = normalizeTeamOrder(state.club.teamOrder);
+        if (!cur.includes(key)) return { ok: false, moved: 0, reason: '없는 팀' };
+        if (cur.length <= MIN_TEAMS) return { ok: false, moved: 0, reason: `팀은 ${MIN_TEAMS}개 이상 있어야 합니다` };
+        let moved = 0;
+        for (const m of state.members) if (m.team === key) { m.team = null; moved += 1; }
+        state.club.teamOrder = cur.filter((k) => k !== key);
+        state.club.mixedTeams = (state.club.mixedTeams || []).filter((k) => k !== key);
+        state.club.coaches = { ...(state.club.coaches || {}), [key]: null };
+        setActiveTeams(state.club.teamOrder);
+        touch();
+        return { ok: true, moved };
+      },
+      /** 팀 순서 한 칸 옮기기 (dir = -1 위로, +1 아래로) */
+      moveTeam(key, dir) {
+        const cur = normalizeTeamOrder(state.club.teamOrder);
+        const i = cur.indexOf(key); const j = i + (dir < 0 ? -1 : 1);
+        if (i < 0 || j < 0 || j >= cur.length) return false;
+        [cur[i], cur[j]] = [cur[j], cur[i]];
+        state.club.teamOrder = cur;
+        setActiveTeams(cur);
+        touch();
+        return true;
+      },
       /** 팀 약자 (일괄 추가에서 줄 맨 앞에 쓰는 1~2글자) */
       teamAlias(key) { return state.club.teamAliases?.[key] || DEFAULT_TEAM_ALIASES[key] || key; },
       teamAliases() {
@@ -1272,6 +1358,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       const stat = { added: 0, filled: 0, skipped: 0, fixed, byTeam: {} };
       if (!merge) {
         state = migrate(data);
+        setActiveTeams(state.club.teamOrder);
         stat.added = state.members.length;
       } else {
         const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
@@ -1356,6 +1443,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     },
     async resetAll() {
       state = emptyState();
+      setActiveTeams(state.club.teamOrder);
       await adapter.clear();
       await adapter.save(state);
       emit();
