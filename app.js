@@ -733,10 +733,12 @@ function availableToday() {
 /** v1.0 으로 올렸을 때 한 번 보여 주는 안내 — 자동 백업 내려받기·되돌리기 경로 */
 function legacyCard() {
   const b = store.legacyBackup?.();
-  if (!b || ui.legacyHidden) return '';
+  // 옛 명단이 실제로 있던 기기에서만 띄운다 (빈 기기에 "회원 0명" 안내가 뜨지 않게)
+  const had = Number(b?.payload?.members) || 0;
+  if (!b || !had || ui.legacyHidden) return '';
   return `<div class="migratecard">
     <div class="mc-top"><b>v1.0 으로 올렸습니다</b><span class="dim">${esc(sinceLabel(b.savedAt))}</span></div>
-    <div class="mc-body">회원 ${store.members.all().length}명·출석·능력치는 그대로입니다.
+    <div class="mc-body">회원 ${had}명·출석·능력치는 그대로입니다.
       내부 팀 배정(교역·장년·청년·체육·학생)과 팀 나누기 기록만 빠졌습니다.
       올리기 직전 데이터는 이 기기에 통째로 남겨 두었습니다 — 아래에서 파일로 받아 두세요.</div>
     <div class="row wrap" style="margin-top:8px">
@@ -870,7 +872,7 @@ function renderOurTeam() {
       <button class="btn block" id="btn-text-import" style="margin-bottom:8px">명단 텍스트로 가져오기</button>
       <button class="btn block" id="btn-fix-names-2" style="margin-bottom:8px">이름 정리 (포지션·나이 분리)</button>
       <button class="btn block" id="btn-rubric" style="margin-bottom:8px">평가 기준표 (남/여)</button>
-      ${store.legacyBackup?.() ? `<button class="btn block" id="btn-legacy-download" style="margin-bottom:8px">v0.7 옛 데이터 받기 (자동 백업)</button>
+      ${Number(store.legacyBackup?.()?.payload?.members) > 0 ? `<button class="btn block" id="btn-legacy-download" style="margin-bottom:8px">v0.7 옛 데이터 받기 (자동 백업)</button>
       <button class="btn block" id="btn-legacy-restore" style="margin-bottom:8px">v0.7 백업에서 되돌리기</button>` : ''}
       <input type="file" id="file-import" accept=".json,application/json,text/plain,*/*" class="hidden">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
