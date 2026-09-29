@@ -1013,3 +1013,58 @@ a.btn { text-decoration: none; }
 }
 .sub-cand-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
 .sub-cand-btn { text-align: left; font-size: 15px; }
+
+/* ================= 훈련 — 팀 훈련 · 개인 훈련 (S5, 2026-09-29) ================= */
+.catchip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line); font-size: 11.5px; font-weight: 800; color: var(--text-2); }
+.catchip b { color: var(--text); }
+
+.drilllist { display: flex; flex-direction: column; gap: 8px; }
+.drill-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 11px 12px;
+}
+.drill-row.hidden { opacity: .5; }
+.drill-row .dr-main { flex: 1; min-width: 0; }
+.drill-row .dr-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 3px; }
+.drill-row .dr-top b { font-size: 14px; font-weight: 800; }
+.drill-row .dr-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; margin-bottom: 4px; }
+.drill-row .dr-meta { font-size: 11px; color: var(--text-3); font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; }
+.drill-row .dr-act { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+
+.sesslist-picked { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.sess-drill-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface-2); border-radius: 10px; padding: 7px 9px;
+}
+.sess-drill-row .n { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-drill-row input[type="number"] { width: 58px; padding: 6px 7px; text-align: center; }
+.sess-sum { font-size: 12px; color: var(--text-2); font-weight: 700; margin: 2px 0 4px; }
+.sess-sum.over { color: var(--warn); }
+
+.tasklist { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.task-row {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 10px 12px;
+}
+.task-row.done { background: var(--accent-soft); border-color: transparent; }
+.task-row .tk-top { display: flex; align-items: center; gap: 8px; }
+.task-row .tk-top .n { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 800; }
+.task-row.done .tk-top .n { text-decoration: line-through; color: var(--text-3); }
+.task-row .tk-target { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+.task-row .tk-diff { font-size: 11.5px; color: var(--accent-ink); font-weight: 700; margin-top: 3px; }
+.task-row .tk-meta { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+
+.weekband { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.weekband b { font-size: 15px; font-weight: 900; }
+.weekband .chip.coach { margin-left: auto; }
+
+.pastweek-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 10px 4px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 700;
+}
+.pastweek-row:first-of-type { border-top: 0; }
+.pastweek-row .dim { margin-left: auto; font-weight: 600; }
+
+.weak-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }

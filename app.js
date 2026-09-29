@@ -22,13 +22,15 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   effectiveSkill, isUnrated, MODULE_VERSION: STORE_VERSION,
   RUBRIC_GENDERS, rubricKeyFor, TESTS, testForAbil, parseTestInput, formatTestValue,
   localDateStr, FORMATION_PRESETS, formationSlots,
-  layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES, QUICK_INSTRUCTION_PRESETS } = STORE_NS;
+  layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES, QUICK_INSTRUCTION_PRESETS,
+  DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, trainingSessionDrillMinutes,
+  currentWeekMonday, weekLabel, weakestAbilities } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 
-export const APP_VERSION = 'v1.0.1';
+export const APP_VERSION = 'v1.1.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -44,6 +46,7 @@ const ui = {
   showInactive: false,
   rosterDone: null,      // 명단 적용 결과 배너
   legacyHidden: false,   // v1.0 업데이트 안내를 이 화면에서 닫았나
+  trainSub: 'team',      // 훈련 탭 하위 — 'team' | 'personal' (S5)
 };
 
 /* ================= 유틸 ================= */
@@ -320,6 +323,7 @@ const ICON = {
   paste: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/><path d="M8.5 12h7M8.5 16h5"/></svg>',
   ai: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 13.5 8 18 9.5 13.5 11 12 15.8 10.5 11 6 9.5 10.5 8 12 3.2Z"/><path d="M18.5 15.5 19.2 17.6 21.3 18.3 19.2 19 18.5 21.1 17.8 19 15.7 18.3 17.8 17.6 18.5 15.5Z"/><path d="M5.5 14 6 15.6 7.6 16.1 6 16.6 5.5 18.2 5 16.6 3.4 16.1 5 15.6 5.5 14Z"/></svg>',
   ball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m12 7 4 2.8-1.5 4.7h-5L8 9.8 12 7z" fill="currentColor" stroke="none" opacity=".3"/><path d="M12 3v4M3.6 9.6 8 9.8M20.4 9.6 16 9.8M6.5 19.6 9.5 14.5M17.5 19.6 14.5 14.5"/></svg>',
+  train: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17 9 12l3 3 5-5"/><path d="M14 8h3v3"/><path d="M3 20h18"/></svg>',
 };
 
 const LOGO = `<svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
@@ -472,6 +476,7 @@ function render() {
   renderOpponent();
   renderBoard();
   renderMatch();
+  renderTraining();
   document.dispatchEvent(new CustomEvent('app:render'));
 }
 
@@ -2049,12 +2054,423 @@ function nameFixSheet() {
   });
 }
 
+/* ================= 훈련 — 팀 훈련 + 개인 훈련 (S5, 2026-09-29) =================
+ * 마스터플랜 §7: 드릴 라이브러리(초기 15개, 삭제 없이 숨김만) + 팀 훈련 세션
+ * (drills[]·attendees[]·notes) + 개인 훈련 과제(주 단위, 규칙 기반 추천·완료 체크·감독 확인).
+ */
+function drillLibraryPreview() {
+  return `<div class="card flat" style="padding:12px 14px">
+    <div class="row wrap">${DRILL_CATEGORIES.map((c) => `<span class="catchip">${esc(c.label)} <b>${store.drills.byCategory(c.key).length}</b></span>`).join('')}</div>
+  </div>`;
+}
+
+function sessionRow(ts) {
+  const mins = trainingSessionDrillMinutes(ts);
+  return `<button type="button" class="match-card" data-session-open="${ts.id}">
+    <div class="match-top"><b>${esc(fmtDate(ts.date))}</b>${ts.theme ? `<span class="chip">${esc(ts.theme)}</span>` : ''}</div>
+    <div class="match-mid"><span class="opp">${ts.drills.length}개 드릴 · ${mins}분${ts.minutes ? ` / 목표 ${ts.minutes}분` : ''}</span>
+      <span class="ha">참가 ${ts.attendees.length}명</span></div>
+    ${ts.notes ? `<div class="match-place">${esc(ts.notes)}</div>` : ''}
+  </button>`;
+}
+
+function renderTeamTrainList() {
+  const list = store.trainingSessions.sorted();
+  let html = `<div class="row" style="margin:12px 0 10px">
+    <button class="btn primary grow" id="btn-add-session">${ICON.plus} 새 훈련 세션</button>
+  </div>`;
+  if (!list.length) {
+    html += `<div class="empty">${ICON.train}
+      <div class="big">등록된 훈련 세션이 없습니다</div>
+      <div>드릴을 담아 오늘의 팀 훈련을 계획해 보세요.</div></div>`;
+  } else {
+    html += `<div class="section-title">훈련 일지 <span class="count">${list.length}</span></div>`;
+    html += list.map(sessionRow).join('');
+  }
+  html += `<div class="section-title" style="margin-top:18px">드릴 라이브러리 <span class="count">${store.drills.visible().length}</span>
+    <button class="btn sm ghost right" id="btn-drill-lib">전체 관리</button></div>`;
+  html += drillLibraryPreview();
+  return html;
+}
+
+/** 세션 만들기/수정 — 지역 상태(drills·attendees)를 두고 repaint 방식(라인업 모달과 같은 패턴) */
+function trainingSessionModal(existing) {
+  const t0 = existing || {
+    date: localDateStr(), theme: '', minutes: 60,
+    drills: [], attendees: (availableToday().length ? availableToday() : []).map((m) => m.id),
+    notes: '',
+  };
+  let date = t0.date; let theme = t0.theme; let minutes = t0.minutes; let notes = t0.notes;
+  let drills = t0.drills.map((d) => ({ ...d }));
+  let attendees = new Set(t0.attendees);
+
+  const activeMembers = store.members.active();
+
+  const draw = () => {
+    const visibleDrills = store.drills.visible();
+    const sum = drills.reduce((s, d) => s + (Number(d.minutes) || 0), 0);
+    return `
+    <h3>${existing ? '훈련 세션 수정' : '새 훈련 세션'}</h3>
+    <div class="row">
+      <div class="field" style="flex:1"><label>날짜</label><input type="date" id="f-ts-date" value="${esc(date)}"></div>
+      <div class="field" style="flex:1"><label>목표 시간(분)</label><input type="number" id="f-ts-min" min="10" max="240" value="${minutes}" inputmode="numeric"></div>
+    </div>
+    <div class="field"><label>주제</label><input type="text" id="f-ts-theme" value="${esc(theme)}" placeholder="예: 패스+체력" maxlength="40"></div>
+
+    <div class="section-title" style="margin-top:14px">드릴 담기 <button type="button" class="btn sm ghost right" id="btn-ts-drilllib">라이브러리 관리</button></div>
+    ${DRILL_CATEGORIES.map((c) => {
+      const pool = visibleDrills.filter((d) => d.category === c.key);
+      if (!pool.length) return '';
+      return `<div class="cand-hint" style="margin-top:6px">${esc(c.label)}</div>
+        <div class="cand-list">${pool.map((d) => `<button type="button" class="cand-chip${drills.some((x) => x.drillId === d.id) ? ' placed' : ''}" data-ts-drill="${d.id}">${esc(d.name)}${drills.some((x) => x.drillId === d.id) ? ' ✓' : ''}</button>`).join('')}</div>`;
+    }).join('')}
+    ${!visibleDrills.length ? '<div class="dim">쓸 수 있는 드릴이 없습니다. 라이브러리 관리에서 추가하세요.</div>' : ''}
+
+    <div class="sess-sum${sum > minutes ? ' over' : ''}">담은 드릴 합계 ${sum}분 / 목표 ${minutes}분</div>
+    <div class="sesslist-picked">${drills.length ? drills.map((d, i) => {
+      const dr = store.drills.byId(d.drillId);
+      return `<div class="sess-drill-row">
+        <span class="n">${esc(dr?.name || '(삭제된 드릴)')}</span>
+        <input type="number" min="1" max="120" data-ts-drmin="${i}" value="${d.minutes}">
+        <button type="button" class="btn sm danger" data-ts-drdel="${i}" aria-label="빼기">×</button>
+      </div>`;
+    }).join('') : '<div class="dim">아직 담은 드릴이 없습니다</div>'}</div>
+
+    <div class="section-title" style="margin-top:14px">참가자 <span class="count">${attendees.size}</span>
+      <button type="button" class="btn sm ghost right" id="btn-ts-att-all">오늘 가능 전원</button></div>
+    <div class="cand-list">${activeMembers.length ? activeMembers.map((m) => `<button type="button" class="cand-chip${attendees.has(m.id) ? ' placed' : ''}" data-ts-att="${m.id}">${esc(m.name)}${attendees.has(m.id) ? ' ✓' : ''}</button>`).join('') : '<div class="dim">활동 회원이 없습니다</div>'}</div>
+
+    <div class="field" style="margin-top:12px"><label>메모 (선택 · 진행 후에 적어도 됩니다)</label><textarea id="f-ts-notes" rows="2" placeholder="진행 후 메모">${esc(notes)}</textarea></div>
+    <div class="foot">
+      ${existing ? '<button class="btn danger" data-act="del">삭제</button>' : ''}
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`;
+  };
+
+  openModal(draw(), (m) => {
+    const repaint = () => { m.innerHTML = draw(); };
+    m.addEventListener('input', (e) => {
+      if (e.target.id === 'f-ts-date') date = e.target.value;
+      if (e.target.id === 'f-ts-theme') theme = e.target.value;
+      if (e.target.id === 'f-ts-min') minutes = Math.max(1, Math.round(Number(e.target.value)) || 60);
+      if (e.target.id === 'f-ts-notes') notes = e.target.value;
+      const drmin = e.target.closest('[data-ts-drmin]');
+      if (drmin) drills[Number(drmin.dataset.tsDrmin)].minutes = Math.max(1, Math.round(Number(drmin.value)) || 10);
+    });
+    m.addEventListener('click', async (e) => {
+      if (e.target.closest('#btn-ts-drilllib')) { closeModal(); return afterModalClose(() => drillLibraryModal()); }
+      const dc = e.target.closest('[data-ts-drill]');
+      if (dc) {
+        const id = dc.dataset.tsDrill;
+        const i = drills.findIndex((x) => x.drillId === id);
+        if (i >= 0) drills.splice(i, 1);
+        else { const dr = store.drills.byId(id); drills.push({ drillId: id, minutes: dr?.minutes || 10 }); }
+        repaint(); return;
+      }
+      const del = e.target.closest('[data-ts-drdel]');
+      if (del) { drills.splice(Number(del.dataset.tsDrdel), 1); repaint(); return; }
+      if (e.target.closest('#btn-ts-att-all')) {
+        const cands = availableToday().length ? availableToday() : activeMembers;
+        attendees = new Set(cands.map((mm) => mm.id));
+        repaint(); return;
+      }
+      const at = e.target.closest('[data-ts-att]');
+      if (at) {
+        const id = at.dataset.tsAtt;
+        if (attendees.has(id)) attendees.delete(id); else attendees.add(id);
+        repaint(); return;
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: '이 훈련 세션을 삭제할까요?', body: '담긴 드릴·참가자·메모가 함께 지워집니다.', ok: '삭제', danger: true })) {
+          store.trainingSessions.remove(existing.id);
+          toast('삭제했습니다'); render();
+        }
+        return;
+      }
+      if (act === 'save') {
+        const data = { date, theme: theme.trim(), minutes, drills, attendees: [...attendees], notes: notes.trim() };
+        if (existing) { store.trainingSessions.update(existing.id, data); toast('수정했습니다'); }
+        else { store.trainingSessions.add(data); toast('훈련 세션을 만들었습니다'); }
+        closeModal(); render();
+        if (ui.tab !== 'training') switchTab('training');
+      }
+    });
+  });
+}
+
+function drillRowHTML(d) {
+  const cat = DRILL_CATEGORIES.find((c) => c.key === d.category);
+  return `<div class="drill-row${d.hidden ? ' hidden' : ''}">
+    <div class="dr-main">
+      <div class="dr-top"><span class="catchip">${esc(cat?.label || d.category)}</span><b>${esc(d.name)}</b>${d.hidden ? '<span class="chip">숨김</span>' : ''}</div>
+      ${d.desc ? `<div class="dr-desc">${esc(d.desc)}</div>` : ''}
+      <div class="dr-meta"><span>${d.minutes}분</span>${d.players ? `<span>${esc(d.players)}</span>` : ''}${d.equipment ? `<span>${esc(d.equipment)}</span>` : ''}</div>
+    </div>
+    <div class="dr-act"><button type="button" class="btn sm ghost" data-dr-edit="${d.id}">수정</button></div>
+  </div>`;
+}
+
+function drillLibraryModal() {
+  const list = store.drills.all().slice()
+    .sort((a, b) => DRILL_CATEGORY_KEYS.indexOf(a.category) - DRILL_CATEGORY_KEYS.indexOf(b.category) || a.name.localeCompare(b.name, 'ko'));
+  openModal(`
+    <h3>드릴 라이브러리</h3>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">숨긴 드릴도 이미 담긴 세션·과제에는 그대로 남습니다 — 지우기는 없습니다.</div>
+    <div class="row" style="margin-bottom:10px"><button type="button" class="btn primary grow" data-act="add">${ICON.plus} 드릴 추가</button></div>
+    <div class="drilllist">${list.map(drillRowHTML).join('')}</div>
+    <div class="foot"><button class="btn primary" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      const edit = e.target.closest('[data-dr-edit]');
+      if (edit) { closeModal(); return afterModalClose(() => drillFormModal(store.drills.byId(edit.dataset.drEdit))); }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'add') { closeModal(); return afterModalClose(() => drillFormModal(null)); }
+    });
+  });
+}
+
+function drillFormModal(existing) {
+  const d0 = existing || { category: 'pass', name: '', desc: '', minutes: 15, players: '', equipment: '' };
+  openModal(`
+    <h3>${existing ? '드릴 수정' : '드릴 추가'}</h3>
+    <div class="field"><label>카테고리</label>
+      <div class="seg-wide wrap" id="f-dr-cat">
+        ${DRILL_CATEGORIES.map((c) => `<button type="button" data-c="${c.key}" aria-pressed="${d0.category === c.key}">${esc(c.label)}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field"><label>이름</label><input type="text" id="f-dr-name" value="${esc(d0.name)}" placeholder="예: 삼각패스 로테이션" maxlength="40"></div>
+    <div class="field"><label>설명 (2줄 정도)</label><textarea id="f-dr-desc" rows="3" maxlength="200" placeholder="어떻게 하는 드릴인지, 무엇을 기르는지">${esc(d0.desc)}</textarea></div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>소요 분</label><input type="number" id="f-dr-min" min="1" max="120" value="${d0.minutes}" inputmode="numeric"></div>
+      <div class="field" style="flex:1"><label>인원</label><input type="text" id="f-dr-players" value="${esc(d0.players)}" placeholder="예: 4인 이상"></div>
+    </div>
+    <div class="field"><label>필요 장비</label><input type="text" id="f-dr-equip" value="${esc(d0.equipment)}" placeholder="예: 콘 4개 · 없음"></div>
+    <div class="foot">
+      ${existing ? `<button type="button" class="btn ${existing.hidden ? 'primary' : 'danger'}" data-act="toggle-hide">${existing.hidden ? '다시 보이기' : '숨기기'}</button>` : ''}
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      const cb = e.target.closest('#f-dr-cat [data-c]');
+      if (cb) { $$('#f-dr-cat [data-c]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === cb))); return; }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'toggle-hide') {
+        store.drills.setHidden(existing.id, !existing.hidden);
+        toast(existing.hidden ? '다시 보이게 했습니다' : '숨겼습니다(세션엔 그대로 남습니다)');
+        closeModal(); return afterModalClose(() => drillLibraryModal());
+      }
+      if (act === 'save') {
+        const name = $('#f-dr-name', m).value.trim();
+        if (!name) { toast('드릴 이름을 입력해 주세요', 'err'); return; }
+        const category = $('#f-dr-cat [aria-pressed="true"]', m)?.dataset.c || 'pass';
+        const data = {
+          category, name,
+          desc: $('#f-dr-desc', m).value.trim(),
+          minutes: Number($('#f-dr-min', m).value) || 15,
+          players: $('#f-dr-players', m).value.trim(),
+          equipment: $('#f-dr-equip', m).value.trim(),
+        };
+        if (existing) { store.drills.update(existing.id, data); toast('수정했습니다'); }
+        else { store.drills.add(data); toast(`${name} 추가`); }
+        closeModal(); render();
+        afterModalClose(() => drillLibraryModal());
+      }
+    });
+  });
+}
+
+function personalMemberRow(m) {
+  const plan = store.personalPlans.current(m.id);
+  const done = plan ? plan.tasks.filter((x) => x.done).length : 0;
+  const total = plan ? plan.tasks.length : 0;
+  return `<button type="button" class="mem-item" data-pp-open="${m.id}">
+    <div class="avatar">${esc(initial(m.name))}</div>
+    <div class="nm">
+      <b>${esc(m.name)}</b>
+      <div class="sub">${plan
+    ? `<span class="chip">이번 주 ${done}/${total} 완료${total && done === total ? ' ✓' : ''}</span>${plan.coachCheck ? '<span class="chip coach">감독확인</span>' : ''}`
+    : '<span class="dim">이번 주 과제 없음</span>'}</div>
+    </div>
+  </button>`;
+}
+
+function renderPersonalTrainList() {
+  const list = store.members.active().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  let html = `<div class="section-title" style="margin-top:12px">개인 훈련 <span class="count">${list.length}</span></div>`;
+  if (!list.length) {
+    html += `<div class="empty">${ICON.member}<div class="big">회원이 없습니다</div><div>우리팀 탭에서 회원을 먼저 등록하세요.</div></div>`;
+  } else {
+    html += list.map(personalMemberRow).join('');
+  }
+  return html;
+}
+
+/** 과제 한 줄 — readonly 면 지난 주 이력 보기(완료 체크·삭제 버튼 없이 상태만 표시) */
+function taskRowHTML(t, i, member, opts = {}) {
+  const dr = t.drillId ? store.drills.byId(t.drillId) : null;
+  const label = dr ? dr.name : (t.text || '(과제)');
+  let diff = '';
+  if (t.testKey && t.baseline != null) {
+    const rec = member?.tests?.[t.testKey];
+    if (rec && rec.sec != null && rec.sec !== t.baseline) {
+      const delta = Math.round((rec.sec - t.baseline) * 10) / 10;
+      diff = `<div class="tk-diff">${esc(formatTestValue(t.testKey, t.baseline))} → ${esc(formatTestValue(t.testKey, rec.sec))} (${delta > 0 ? '+' : ''}${delta})</div>`;
+    } else {
+      diff = `<div class="tk-meta">기준 기록 ${esc(formatTestValue(t.testKey, t.baseline))} · 재측정 전</div>`;
+    }
+  }
+  const actions = opts.readonly
+    ? `<span class="chip${t.done ? '' : ' warn'}">${t.done ? '완료' : '미완료'}</span>`
+    : `<button type="button" class="btn sm ${t.done ? 'primary' : 'ghost'}" data-tk-done="${i}">${t.done ? '✓ 완료' : '완료 체크'}</button>
+       <button type="button" class="btn sm danger" data-tk-del="${i}" aria-label="과제 삭제">×</button>`;
+  return `<div class="task-row${t.done ? ' done' : ''}">
+    <div class="tk-top"><span class="n">${esc(label)}</span>${actions}</div>
+    ${dr?.desc ? `<div class="tk-meta">${esc(dr.desc)}</div>` : ''}
+    ${t.target ? `<div class="tk-target">목표: ${esc(t.target)}</div>` : ''}
+    ${diff}
+  </div>`;
+}
+
+/** 개인 훈련 상세 — 매 조작마다 store 에 즉시 저장하고, draw() 는 항상 최신 store 상태를 읽어 다시 그린다 */
+function personalPlanModal(memberId) {
+  const draw = () => {
+    const member = store.members.byId(memberId);
+    if (!member) return '<h3>회원을 찾을 수 없습니다</h3><div class="foot"><button type="button" class="btn primary" data-act="close">닫기</button></div>';
+    const plan = store.personalPlans.current(memberId);
+    const weak = weakestAbilities(member, 2);
+    const history = store.personalPlans.byMember(memberId).filter((p) => p.weekOf !== currentWeekMonday());
+    return `
+    <h3>${esc(member.name)} · 개인 훈련</h3>
+    ${weak.length || member.gk || member.pos === 'GK' ? `<div class="weak-chips">
+      ${weak.map((k) => `<span class="chip warn">${esc(ABILITIES.find((a) => a.key === k)?.label || k)} 약점</span>`).join('')}
+      ${member.gk || member.pos === 'GK' ? '<span class="chip gk">GK</span>' : ''}
+    </div>` : ''}
+
+    <div class="weekband"><b>이번 주 · ${esc(weekLabel(currentWeekMonday()))}</b>
+      ${plan ? `<button type="button" class="chip coach" data-act="coach" aria-pressed="${plan.coachCheck}">${plan.coachCheck ? '감독확인 ✓' : '감독 확인'}</button>` : ''}</div>
+
+    ${!plan ? `
+      <div class="dim" style="margin-bottom:10px">간단 체크 약점 2항목·측정 기록을 바탕으로 이번 주 과제를 규칙대로 추천합니다(AI 아님).</div>
+      <button type="button" class="btn primary block" data-act="recommend">이번 주 과제 만들기</button>
+    ` : `
+      <div class="tasklist">${plan.tasks.length ? plan.tasks.map((t, i) => taskRowHTML(t, i, member)).join('') : '<div class="dim">과제가 없습니다</div>'}</div>
+      <div class="row" style="margin:8px 0 4px">
+        <input type="text" id="f-tk-text" placeholder="직접 입력 (예: 개인 러닝 30분)" style="flex:1" maxlength="120">
+        <button type="button" class="btn sm primary" data-act="add-task">추가</button>
+      </div>
+    `}
+
+    <div class="section-title" style="margin-top:16px">지난 과제 이력 <span class="count">${history.length}</span></div>
+    ${history.length ? history.map((p) => {
+      const done = p.tasks.filter((t) => t.done).length;
+      return `<button type="button" class="pastweek-row" data-pp-history="${p.id}">
+        <span>${esc(weekLabel(p.weekOf))}</span>
+        <span class="dim">${done}/${p.tasks.length} 완료${p.coachCheck ? ' · 감독확인' : ''}</span>
+      </button>`;
+    }).join('') : '<div class="dim">지난 과제 기록이 없습니다</div>'}
+
+    <div class="foot"><button type="button" class="btn primary" data-act="close">닫기</button></div>`;
+  };
+
+  openModal(draw(), (m) => {
+    const repaint = () => { m.innerHTML = draw(); };
+    m.addEventListener('click', (e) => {
+      const hist = e.target.closest('[data-pp-history]');
+      if (hist) { closeModal(); return afterModalClose(() => pastWeekModal(hist.dataset.ppHistory)); }
+      const done = e.target.closest('[data-tk-done]');
+      const del = e.target.closest('[data-tk-del]');
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!done && !del && !act) return;
+      const plan = store.personalPlans.current(memberId);
+      if (done && plan) {
+        const idx = Number(done.dataset.tkDone);
+        store.personalPlans.setTaskDone(plan.id, idx, !plan.tasks[idx].done);
+        repaint(); renderTraining(); return;
+      }
+      if (del && plan) {
+        store.personalPlans.update(plan.id, { tasks: plan.tasks.filter((_, i) => i !== Number(del.dataset.tkDel)) });
+        repaint(); renderTraining(); return;
+      }
+      if (act === 'close') return closeModal();
+      if (act === 'coach' && plan) {
+        store.personalPlans.update(plan.id, { coachCheck: !plan.coachCheck });
+        repaint(); renderTraining(); return;
+      }
+      if (act === 'recommend') {
+        const tasks = store.personalPlans.recommend(memberId);
+        if (!tasks.length) { toast('추천할 드릴이 없습니다. 드릴 라이브러리를 확인해 주세요', 'err'); return; }
+        store.personalPlans.add({ memberId, tasks });
+        toast('이번 주 과제를 만들었습니다');
+        repaint(); renderTraining(); return;
+      }
+      if (act === 'add-task') {
+        const input = $('#f-tk-text', m);
+        const text = input?.value.trim();
+        if (!text) { toast('내용을 입력해 주세요', 'err'); return; }
+        const cur = plan || store.personalPlans.add({ memberId, tasks: [] });
+        store.personalPlans.update(cur.id, { tasks: [...cur.tasks, { text }] });
+        toast('과제를 추가했습니다');
+        repaint(); renderTraining();
+      }
+    });
+  });
+}
+
+/** 지난 주 과제 이력 — 읽기 전용 상세 (삭제만 가능) */
+function pastWeekModal(planId) {
+  const plan = store.personalPlans.byId(planId);
+  if (!plan) return;
+  const member = store.members.byId(plan.memberId);
+  openModal(`
+    <h3>${esc(weekLabel(plan.weekOf))}${member ? ` · ${esc(member.name)}` : ' · 탈퇴 선수'}</h3>
+    ${plan.coachCheck ? '<div class="chip coach" style="margin-bottom:8px">감독확인 ✓</div>' : ''}
+    <div class="tasklist">${plan.tasks.length ? plan.tasks.map((t, i) => taskRowHTML(t, i, member, { readonly: true })).join('') : '<div class="dim">과제가 없습니다</div>'}</div>
+    <div class="foot">
+      <button type="button" class="btn danger" data-act="del">이 기록 삭제</button>
+      <button type="button" class="btn primary" data-act="close">닫기</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: '이 주의 과제 기록을 삭제할까요?', ok: '삭제', danger: true })) {
+          store.personalPlans.remove(plan.id);
+          toast('삭제했습니다');
+          if (member) afterModalClose(() => personalPlanModal(member.id));
+        }
+      }
+    });
+  });
+}
+
+function renderTraining() {
+  const root = $('#view-training');
+  if (!root) return;
+  let html = `<div class="seg-wide" id="train-sub">
+    <button type="button" data-sub="team" aria-pressed="${ui.trainSub !== 'personal'}">팀 훈련</button>
+    <button type="button" data-sub="personal" aria-pressed="${ui.trainSub === 'personal'}">개인 훈련</button>
+  </div>`;
+  html += ui.trainSub === 'personal' ? renderPersonalTrainList() : renderTeamTrainList();
+  root.innerHTML = html;
+}
+
 /* ================= 동작 ================= */
 const TABS = {
   ourteam: { title: '우리팀', render: () => renderOurTeam() },
   opponent: { title: '상대팀', render: () => renderOpponent() },
   board: { title: '전술보드', render: () => renderBoard() },
   match: { title: '경기', render: () => renderMatch() },
+  training: { title: '훈련', render: () => renderTraining() },
 };
 
 function switchTab(tab, { push = true } = {}) {
@@ -2783,6 +3199,16 @@ function bindEvents() {
     if (t.closest('#btn-add-match')) return matchInfoModal(null);
     const mo = t.closest('[data-match-open]');
     if (mo) return matchDetailModal(mo.dataset.matchOpen);
+
+    /* ----- 훈련 (S5) ----- */
+    const tsub = t.closest('#train-sub [data-sub]');
+    if (tsub) { ui.trainSub = tsub.dataset.sub; return renderTraining(); }
+    if (t.closest('#btn-add-session')) return trainingSessionModal(null);
+    const so = t.closest('[data-session-open]');
+    if (so) return trainingSessionModal(store.trainingSessions.byId(so.dataset.sessionOpen));
+    if (t.closest('#btn-drill-lib')) return drillLibraryModal();
+    const ppo = t.closest('[data-pp-open]');
+    if (ppo) return personalPlanModal(ppo.dataset.ppOpen);
 
     /* ----- 전술보드 (S3/S4) ----- */
     const vm = t.closest('#bd-view-mode [data-vm]');

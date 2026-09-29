@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.0.1';
+export const MODULE_VERSION = 'v1.1.0';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -526,6 +526,170 @@ export function computeRecordFor(matches, opponentId) {
   return rec;
 }
 
+/* ---------------- 훈련 — 드릴 라이브러리 (S5, 2026-09-29) ----------------
+ * 마스터플랜 §7: 팀 훈련 드릴 초기 15개 + 직접 추가/수정/숨김.
+ * 드릴은 "삭제"가 없다 — 지난 훈련 세션이 그 드릴을 참조하므로, 숨김(hidden)만 있다.
+ * 숨긴 드릴도 이미 담긴 세션에는 그대로 남고(참조로 조회), 새로 담을 목록에서만 빠진다.
+ */
+export const DRILL_CATEGORIES = [
+  { key: 'pass', label: '패스' },
+  { key: 'press', label: '압박' },
+  { key: 'transition', label: '전환' },
+  { key: 'setpiece', label: '세트피스' },
+  { key: 'fitness', label: '체력' },
+  { key: 'gk', label: 'GK' },
+];
+export const DRILL_CATEGORY_KEYS = DRILL_CATEGORIES.map((c) => c.key);
+
+/** 초기 15개 — id 를 고정해 두어 여러 기기에서 올려도(migrate) 중복 시딩되지 않는다 */
+export const DEFAULT_DRILLS = [
+  { id: 'dr_pass_01', category: 'pass', name: '삼각패스 로테이션', desc: '세 명이 삼각형을 이뤄 원터치 패스를 주고받는다. 위치를 계속 바꿔가며 패스 정확도와 시야를 기른다.', minutes: 15, players: '3인 이상', equipment: '콘 3개' },
+  { id: 'dr_pass_02', category: 'pass', name: '론도 (볼 점유)', desc: '4~6명이 원 안의 수비 1~2명을 상대로 볼을 돌린다. 압박 속 패스 타이밍과 볼 컨트롤을 기른다.', minutes: 15, players: '5인 이상', equipment: '조끼 2벌' },
+  { id: 'dr_pass_03', category: 'pass', name: '롱패스 정확도', desc: '20~30m 거리에서 지정된 표적(콘)으로 롱패스를 연습한다. 킥 정확도와 파워를 기른다.', minutes: 15, players: '2인 1조', equipment: '콘 4개' },
+  { id: 'dr_press_01', category: 'press', name: '2대1 압박 게임', desc: '좁은 구역에서 공격 1명을 수비 2명이 협력 압박한다. 협력 수비와 즉각 전방 압박을 기른다.', minutes: 12, players: '3인 1조', equipment: '콘 4개' },
+  { id: 'dr_press_02', category: 'press', name: '스위칭 압박 라인', desc: '수비 라인 전체가 신호에 맞춰 동시에 전진·후퇴하며 압박 타이밍을 맞춘다.', minutes: 15, players: '4인 이상', equipment: '콘 8개' },
+  { id: 'dr_trans_01', category: 'transition', name: '역습 3대2', desc: '수비 상황에서 볼을 뺏으면 즉시 3명이 2명 수비를 상대로 빠른 역습을 전개한다.', minutes: 15, players: '5인 1조', equipment: '미니골 1개' },
+  { id: 'dr_trans_02', category: 'transition', name: '공수 전환 셔틀', desc: '볼을 빼앗기면 즉시 되찾기 위해 전원이 반대 방향으로 전력 질주한다. 전환 속도를 기른다.', minutes: 12, players: '전체', equipment: '조끼 2벌' },
+  { id: 'dr_setpiece_01', category: 'setpiece', name: '코너킥 마무리', desc: '지정된 코너킥 루틴대로 크로스를 올리고 지정 선수가 헤딩·발리로 마무리한다.', minutes: 15, players: '6인 이상', equipment: '미니골 1개' },
+  { id: 'dr_setpiece_02', category: 'setpiece', name: '프리킥 직접 슈팅', desc: '박스 앞 지정 거리에서 수비벽을 세우고 직접 프리킥 슈팅을 반복한다. 감아차기와 파워킥을 번갈아 연습한다.', minutes: 15, players: '3인 이상', equipment: '미니골·조끼' },
+  { id: 'dr_setpiece_03', category: 'setpiece', name: '박스 안 마무리 슈팅', desc: '크로스·컷백을 받아 박스 안에서 원터치·투터치로 마무리하는 슈팅 감각을 기른다.', minutes: 12, players: '4인 이상', equipment: '미니골 1개' },
+  { id: 'dr_fitness_01', category: 'fitness', name: '20m 왕복 셔틀런', desc: '20m 구간을 신호에 맞춰 왕복 질주한다. 스피드·순발력 측정 종목과 같은 방식으로 훈련한다.', minutes: 10, players: '전체', equipment: '콘 2개' },
+  { id: 'dr_fitness_02', category: 'fitness', name: '인터벌 러닝', desc: '1분 전력 질주 + 1분 걷기를 반복한다. 경기 후반 지구력을 기른다.', minutes: 15, players: '전체', equipment: '없음' },
+  { id: 'dr_fitness_03', category: 'fitness', name: '사다리·콘 민첩성', desc: '어질리티 사다리와 지그재그 콘 드리블로 순발력과 방향전환 능력을 기른다.', minutes: 10, players: '개인 가능', equipment: '어질리티 사다리·콘 6개' },
+  { id: 'dr_gk_01', category: 'gk', name: '반응 캐칭', desc: '짧은 거리에서 다양한 방향의 슈팅을 받아 반응 속도와 캐칭 안정성을 기른다.', minutes: 15, players: '골키퍼+슈터 1명', equipment: '공 10개' },
+  { id: 'dr_gk_02', category: 'gk', name: '크로스 처리·배급', desc: '크로스를 잡거나 펀칭한 뒤 빠르게 역습 배급까지 이어가는 흐름을 연습한다.', minutes: 15, players: '골키퍼+2인', equipment: '공 8개' },
+];
+
+export function normalizeDrill(d) {
+  const now = new Date().toISOString();
+  const minutes = Math.round(Number(d?.minutes));
+  return {
+    id: d?.id || uid('dr'),
+    category: DRILL_CATEGORY_KEYS.includes(d?.category) ? d.category : 'pass',
+    name: String(d?.name ?? '').trim().slice(0, 40),
+    desc: String(d?.desc ?? '').trim().slice(0, 200),
+    minutes: Number.isFinite(minutes) && minutes > 0 ? Math.min(120, minutes) : 15,
+    players: String(d?.players ?? '').trim().slice(0, 30),
+    equipment: String(d?.equipment ?? '').trim().slice(0, 60),
+    hidden: !!d?.hidden,
+    createdAt: d?.createdAt || now,
+    updatedAt: d?.updatedAt || now,
+  };
+}
+
+/* ---------------- 훈련 — 팀 훈련 세션 (S5, 2026-09-29) ---------------- */
+export function normalizeTrainingDrillRef(x) {
+  const minutes = Math.round(Number(x?.minutes));
+  return {
+    drillId: typeof x?.drillId === 'string' && x.drillId ? x.drillId : null,
+    minutes: Number.isFinite(minutes) && minutes > 0 ? Math.min(120, minutes) : 10,
+  };
+}
+export function normalizeTrainingSession(x) {
+  const now = new Date().toISOString();
+  const total = Math.round(Number(x?.minutes));
+  return {
+    id: x?.id || uid('ts'),
+    date: typeof x?.date === 'string' && x.date ? x.date : localDateStr(),
+    theme: String(x?.theme ?? '').trim().slice(0, 40),
+    minutes: Number.isFinite(total) && total > 0 ? Math.min(240, total) : 60,
+    drills: Array.isArray(x?.drills) ? x.drills.map(normalizeTrainingDrillRef).filter((d) => d.drillId) : [],
+    attendees: Array.isArray(x?.attendees) ? [...new Set(x.attendees.filter((id) => typeof id === 'string' && id))] : [],
+    notes: typeof x?.notes === 'string' ? x.notes.trim().slice(0, 1000) : '',
+    createdAt: x?.createdAt || now,
+    updatedAt: x?.updatedAt || now,
+  };
+}
+/** 세션에 담긴 드릴의 합계 분 (목표 minutes 와 별개로 화면에 비교 표시) */
+export function trainingSessionDrillMinutes(ts) {
+  return (ts?.drills || []).reduce((sum, d) => sum + (Number(d.minutes) || 0), 0);
+}
+
+/* ---------------- 훈련 — 개인 훈련 과제 (S5, 2026-09-29) ----------------
+ * 회원 attrs(간단 체크 6항목) 하위 2항목 + tests(shuttle20/run1500) 를 근거로
+ * 드릴을 규칙 기반(AI 아님)으로 추천한다 — recommendTasksFor().
+ */
+export function normalizePersonalTask(t) {
+  const baseline = Number(t?.baseline);
+  return {
+    drillId: typeof t?.drillId === 'string' && t.drillId ? t.drillId : null,
+    text: typeof t?.text === 'string' ? t.text.trim().slice(0, 120) : '',
+    target: typeof t?.target === 'string' ? t.target.trim().slice(0, 60) : '',
+    testKey: typeof t?.testKey === 'string' && TEST_KEYS.includes(t.testKey) ? t.testKey : null,
+    baseline: Number.isFinite(baseline) && baseline > 0 ? baseline : null,
+    done: !!t?.done,
+    doneAt: typeof t?.doneAt === 'string' ? t.doneAt : null,
+  };
+}
+/** dateStr 이 속한 주의 월요일 ("YYYY-MM-DD") */
+export function weekMondayOf(dateStr) {
+  const d = new Date(`${dateStr || localDateStr()}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return localDateStr();
+  const day = d.getDay();   // 0=일 ~ 6=토
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return localDateStr(d);
+}
+export function currentWeekMonday() { return weekMondayOf(localDateStr()); }
+/** "9월 22일 주" 표기 */
+export function weekLabel(weekOf) {
+  const d = new Date(`${weekOf}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return weekOf;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 주`;
+}
+export function normalizePersonalPlan(x) {
+  const now = new Date().toISOString();
+  return {
+    id: x?.id || uid('pp'),
+    memberId: typeof x?.memberId === 'string' && x.memberId ? x.memberId : null,
+    weekOf: typeof x?.weekOf === 'string' && x.weekOf ? weekMondayOf(x.weekOf) : currentWeekMonday(),
+    tasks: Array.isArray(x?.tasks) ? x.tasks.map(normalizePersonalTask).filter((t) => t.drillId || t.text) : [],
+    coachCheck: !!x?.coachCheck,
+    createdAt: x?.createdAt || now,
+    updatedAt: x?.updatedAt || now,
+  };
+}
+
+/** 간단 체크 6항목 중 평가된 것 가운데 가장 낮은 n개 (미평가 항목은 후보에서 제외) */
+export function weakestAbilities(member, n = 2) {
+  const rated = ABILITY_KEYS.map((k) => ({ key: k, val: member?.abil?.[k] })).filter((x) => typeof x.val === 'number');
+  if (!rated.length) return [];
+  return [...rated].sort((a, b) => a.val - b.val).slice(0, n).map((x) => x.key);
+}
+/** 간단 체크 항목 → 드릴 카테고리 (규칙 기반 매핑) */
+export const ABIL_DRILL_CATEGORY = {
+  speed: 'fitness', stamina: 'fitness', basic: 'pass', shoot: 'setpiece', defense: 'press', physical: 'transition',
+};
+/**
+ * 이번 주 과제 규칙 기반 추천 (AI 아님) — 저장하지 않고 과제 배열만 돌려준다.
+ *  - 약점 2항목(weakestAbilities) → 매핑된 카테고리에서 드릴 1개씩
+ *  - GK 회원이면 GK 카테고리 드릴을 우선 하나 포함
+ *  - shuttle20/run1500 기록이 있으면 재측정 목표(현재 기록보다 살짝 빠른 값)를 과제로 추가
+ */
+export function recommendTasksFor(member, drills) {
+  const weak = weakestAbilities(member, 2);
+  const isGk = !!(member?.gk || member?.pos === 'GK');
+  const cats = weak.length ? weak.map((k) => ABIL_DRILL_CATEGORY[k]) : ['fitness', 'pass'];
+  if (isGk) cats.unshift('gk');
+  const tasks = [];
+  const used = new Set();
+  for (const cat of cats) {
+    const pool = (drills || []).filter((d) => !d.hidden && d.category === cat && !used.has(d.id));
+    const pick = pool[0];
+    if (pick) { used.add(pick.id); tasks.push(normalizePersonalTask({ drillId: pick.id })); }
+  }
+  for (const t of TESTS) {
+    const rec = member?.tests?.[t.key];
+    if (!rec || rec.sec == null) continue;
+    const improved = t.unit === 'mmss' ? Math.max(60, Math.round(rec.sec - 8)) : Math.round((rec.sec - 0.3) * 10) / 10;
+    tasks.push(normalizePersonalTask({
+      text: `${t.label} 재측정`, target: `${formatTestValue(t.key, improved)} 이내 목표`,
+      testKey: t.key, baseline: rec.sec,
+    }));
+  }
+  return tasks.slice(0, 6);
+}
+
 export function emptyState() {
   return {
     schema: SCHEMA_VERSION,
@@ -539,6 +703,9 @@ export function emptyState() {
     matches: [],
     opponents: [],   // 상대 클럽 카드 (S2에서 채운다 — v1.0은 자리만)
     tactics: [],
+    drills: DEFAULT_DRILLS.map(normalizeDrill),   // 드릴 라이브러리 (S5) — 초기 15개
+    trainingSessions: [],   // 팀 훈련 세션 (S5)
+    personalPlans: [],      // 개인 훈련 과제 (S5)
     updatedAt: new Date().toISOString(),
   };
 }
@@ -876,6 +1043,10 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.opponents = Array.isArray(raw?.opponents) ? raw.opponents.map(normalizeOpponent) : [];
     for (const o of s.opponents) o.record = computeRecordFor(s.matches, o.id);
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
+    // S5: 드릴은 한 번만 시딩한다 — 이미 저장된 목록(추가·수정·숨김 포함)이 있으면 그걸 쓴다
+    s.drills = Array.isArray(s.drills) && s.drills.length ? s.drills.map(normalizeDrill) : DEFAULT_DRILLS.map(normalizeDrill);
+    s.trainingSessions = Array.isArray(raw?.trainingSessions) ? raw.trainingSessions.map(normalizeTrainingSession) : [];
+    s.personalPlans = Array.isArray(raw?.personalPlans) ? raw.personalPlans.map(normalizePersonalPlan).filter((p) => p.memberId) : [];
     return s;
   }
 
@@ -1202,6 +1373,12 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           ...t,
           pins: (t.pins || []).filter((p) => p.memberId !== id),
         }));
+        // S5: 팀 훈련 참가자 목록에서는 빠진다(출석 표시의 연장선). 개인 훈련 과제는
+        // 지워지지 않는다 — memberId 는 그대로 두고, 화면에서 찾지 못하면 "탈퇴 선수"로 표시한다
+        // (substitutions·boardSnapshot 과 같은 데이터 손실 0 원칙).
+        for (const ts of state.trainingSessions) {
+          ts.attendees = ts.attendees.filter((x) => x !== id);
+        }
         touch();
       },
     },
@@ -1312,6 +1489,97 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         const r = o?.record || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
         const diff = r.gf - r.ga;
         return `${r.w}승 ${r.d}무 ${r.l}패 · 득실 ${diff > 0 ? '+' : ''}${diff}`;
+      },
+    },
+
+    /* 드릴 라이브러리 (S5) — "삭제" 없음, 숨김만 */
+    drills: {
+      all() { return state.drills; },
+      visible() { return state.drills.filter((d) => !d.hidden); },
+      byCategory(cat) { return api.drills.visible().filter((d) => d.category === cat); },
+      byId(id) { return state.drills.find((d) => d.id === id) || null; },
+      add(data) {
+        const d = normalizeDrill({ ...data, id: undefined });
+        state.drills.push(d);
+        touch();
+        return d;
+      },
+      update(id, patch) {
+        const i = state.drills.findIndex((d) => d.id === id);
+        if (i < 0) return null;
+        state.drills[i] = normalizeDrill(Object.assign({}, state.drills[i], patch, { id, updatedAt: new Date().toISOString() }));
+        touch();
+        return state.drills[i];
+      },
+      setHidden(id, hidden) { return api.drills.update(id, { hidden: !!hidden }); },
+    },
+
+    /* 팀 훈련 세션 (S5) */
+    trainingSessions: {
+      all() { return state.trainingSessions; },
+      sorted() { return [...state.trainingSessions].sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id)); },
+      byId(id) { return state.trainingSessions.find((t) => t.id === id) || null; },
+      add(data) {
+        const t = normalizeTrainingSession(data);
+        state.trainingSessions.push(t);
+        touch();
+        return t;
+      },
+      update(id, patch) {
+        const i = state.trainingSessions.findIndex((t) => t.id === id);
+        if (i < 0) return null;
+        state.trainingSessions[i] = normalizeTrainingSession(Object.assign({}, state.trainingSessions[i], patch, { id, updatedAt: new Date().toISOString() }));
+        touch();
+        return state.trainingSessions[i];
+      },
+      remove(id) {
+        state.trainingSessions = state.trainingSessions.filter((t) => t.id !== id);
+        touch();
+      },
+    },
+
+    /* 개인 훈련 과제 (S5) */
+    personalPlans: {
+      all() { return state.personalPlans; },
+      byId(id) { return state.personalPlans.find((p) => p.id === id) || null; },
+      /** 한 회원의 과제 이력 — 최신 주 먼저 */
+      byMember(memberId) {
+        return state.personalPlans.filter((p) => p.memberId === memberId).sort((a, b) => b.weekOf.localeCompare(a.weekOf));
+      },
+      /** 특정 주(기본 이번 주)의 과제 — 없으면 null */
+      current(memberId, weekOf = currentWeekMonday()) {
+        return state.personalPlans.find((p) => p.memberId === memberId && p.weekOf === weekOf) || null;
+      },
+      add(data) {
+        const p = normalizePersonalPlan(data);
+        state.personalPlans.push(p);
+        touch();
+        return p;
+      },
+      update(id, patch) {
+        const i = state.personalPlans.findIndex((p) => p.id === id);
+        if (i < 0) return null;
+        state.personalPlans[i] = normalizePersonalPlan(Object.assign({}, state.personalPlans[i], patch, { id, updatedAt: new Date().toISOString() }));
+        touch();
+        return state.personalPlans[i];
+      },
+      remove(id) {
+        state.personalPlans = state.personalPlans.filter((p) => p.id !== id);
+        touch();
+      },
+      setTaskDone(planId, idx, done) {
+        const p = api.personalPlans.byId(planId);
+        if (!p || !p.tasks[idx]) return null;
+        p.tasks[idx] = { ...p.tasks[idx], done: !!done, doneAt: done ? new Date().toISOString() : null };
+        p.updatedAt = new Date().toISOString();
+        touch();
+        return p;
+      },
+      /** 규칙 기반 추천(AI 아님) — 저장하지 않고 과제 배열만 돌려준다 */
+      recommend(memberId) {
+        const m = api.members.byId(memberId);
+        if (!m) return [];
+        return recommendTasksFor(m, api.drills.visible());
       },
     },
 
@@ -1453,7 +1721,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
       let fresh = 0; let existing = 0;
       for (const m of next.members) (byName.has(m.name.trim()) ? existing += 1 : fresh += 1);
-      return { total: next.members.length, fresh, existing, matches: next.matches.length, opponents: next.opponents.length, fixed, current: state.members.length };
+      return { total: next.members.length, fresh, existing, matches: next.matches.length, opponents: next.opponents.length,
+        trainingSessions: next.trainingSessions.length, personalPlans: next.personalPlans.length, fixed, current: state.members.length };
     },
     /**
      * 백업 가져오기 (v0.6.3)
@@ -1545,11 +1814,48 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           if (tids.has(t.id)) continue;
           state.tactics.push({ ...t, pins: (t.pins || []).map((pin) => ({ ...pin, memberId: remap(pin.memberId) })) });
         }
+
+        // S5: 드릴 라이브러리 — id 로 합친다(기본 15개는 기기 간 id 가 같아 중복되지 않는다).
+        // 이미 있는 id 는 그대로 두고(내용은 이 기기 것을 우선), 처음 보는 id 만 추가한다.
+        const drillIds = new Set(state.drills.map((d) => d.id));
+        const drillIdMap = new Map();
+        for (const inc of next.drills) {
+          if (drillIds.has(inc.id)) { drillIdMap.set(inc.id, inc.id); continue; }
+          const d = { ...inc };
+          drillIds.add(d.id);
+          drillIdMap.set(inc.id, d.id);
+          state.drills.push(d);
+        }
+        const remapDrill = (id) => (id ? (drillIdMap.get(id) || id) : null);
+
+        // S5: 팀 훈련 세션 — id 로 합친다(처음 보는 세션만 추가). 회원·드릴 id 를 이 기기 기준으로 다시 잇는다
+        const tsIds = new Set(state.trainingSessions.map((t) => t.id));
+        for (const t of next.trainingSessions) {
+          if (tsIds.has(t.id)) continue;
+          state.trainingSessions.push({
+            ...t,
+            attendees: t.attendees.map((mid) => remap(mid)),
+            drills: t.drills.map((dr) => ({ ...dr, drillId: remapDrill(dr.drillId) })),
+          });
+        }
+
+        // S5: 개인 훈련 과제 — id 로 합친다(처음 보는 과제만 추가). 회원·드릴 id 를 다시 잇는다
+        const ppIds = new Set(state.personalPlans.map((p) => p.id));
+        for (const p of next.personalPlans) {
+          if (ppIds.has(p.id)) continue;
+          state.personalPlans.push({
+            ...p,
+            memberId: remap(p.memberId),
+            tasks: p.tasks.map((t) => (t.drillId ? { ...t, drillId: remapDrill(t.drillId) } : t)),
+          });
+        }
+
         syncOpponentRecords();   // 새로 들어온/이어붙은 경기 기록으로 전적을 다시 센다
       }
       await adapter.save(state);
       emit();
-      return { members: state.members.length, matches: state.matches.length, opponents: state.opponents.length, ...stat };
+      return { members: state.members.length, matches: state.matches.length, opponents: state.opponents.length,
+        drills: state.drills.length, trainingSessions: state.trainingSessions.length, personalPlans: state.personalPlans.length, ...stat };
     },
 
     /**

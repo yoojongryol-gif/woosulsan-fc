@@ -1,12 +1,15 @@
-# 축구&joy 데이터 모델 (schema 3, v1.0.1)
+# 축구&joy 데이터 모델 (schema 3, v1.1.0)
 
 > **v1.0 전면 개편 (2026-09-29)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
 > 사장님 확정: **상대는 외부 클럽만**. 내부 팀 배정(A~F)·팀 묶음 제안·팀별 감독 평가는 이 앱에서 없앴다.
-> 하단 탭은 **우리팀 · 상대팀 · 전술보드 · 경기** 4개.
+> 하단 탭은 **우리팀 · 상대팀 · 전술보드 · 경기 · 훈련** 5개(S5 부터).
 > **S1**(v1.0.0-alpha, 2026-09-29 아침): 우리팀 탭만 완성, 나머지는 자리표시.
 > **S2**(v1.0.0-beta, 2026-09-29 오후): 상대팀 카드 + 경기 기록(라인업 목록 배치·결과·득점자/도움) + 전적 자동 계산. 전술보드는 여전히 자리표시(S3 준비 중).
 > **S3**(v1.0.0, 2026-09-29 저녁): 전술보드 **준비 모드** — 필드 SVG + 우리 라인업(파란 원)·상대 포메이션(회색 점선 원) 자동 배치·드래그(포인터)·화살표·세트피스 템플릿·PNG 내보내기·`match.boardSnapshot` 저장. 경기 모드(폰·큰 글씨·잠금)는 S4, 토글 자리만 있다.
 > **S4**(v1.0.1, 2026-09-29 밤): 전술보드 **경기 모드** — 세로 폰 전제 고대비 화면(하단 큰 버튼 3개: 선수 교체·화살표·지우기), 잠금 토글(길게 눌러 해제), 화면 꺼짐 방지(Wake Lock API, 미지원 시 무시), 핀 탭 → 교체 후보 목록 → 탭 교체(`match.substitutions` 기록), 빠른 지시 프리셋 6개(화살표 묶음 즉시 삽입). 변경 즉시 `match.boardSnapshot`/`match.substitutions` 자동 저장 — 준비 모드와 스냅샷을 공유한다.
+> **S5**(v1.1.0, 2026-09-29 심야): 훈련 탭 신설(팀 훈련 + 개인 훈련) — 드릴 라이브러리(초기 15개, 삭제 없이 숨김만) ·
+> 팀 훈련 세션(`trainingSession`: 드릴 담기·참가자는 오늘 출석 연동·메모) · 개인 훈련 과제(`personalPlan`: 주 단위,
+> 간단 체크 약점 2항목 + 측정 기록 기반 **규칙 기반 추천**(AI 아님)·완료 체크·감독 확인·재측정 전후 비교). 12장 참고.
 > 내려간 코드는 `dev/parked/`(balance.js · tactics-v0.x.js · team-tab-v0.7.js · test-teams-v0.7.mjs)에 있다.
 > `dev/parked/tactics-v0.x.js` 는 S3 에서 **필드 SVG 뼈대(펜티박스·센터서클 좌표)만** 참고했다 — 5팀 의존 코드(teamOptions·TEAM_KEYS 등)는 가져오지 않았다.
 
@@ -34,6 +37,9 @@
   "matches":   [ /* Match */ ],
   "opponents": [ /* Opponent — S2 에서 채운다. v1.0 은 빈 배열로 자리만 */ ],
   "tactics":   [ /* Tactic — S3 에서 새 보드 엔진으로 다시 정의 */ ],
+  "drills":    [ /* Drill — S5. 앱을 처음 열 때 15개가 자동으로 시딩된다(12장) */ ],
+  "trainingSessions": [ /* TrainingSession — S5 */ ],
+  "personalPlans":    [ /* PersonalPlan — S5 */ ],
   "updatedAt": "2026-09-29T06:00:00.000Z"
 }
 ```
@@ -276,6 +282,77 @@ clubs/{clubId}                    name, adminUids[]
 | 상대팀 | 클럽 카드 목록·상세(메모·경기 이력) | `opponents.all()`, `opponents.matchesOf()` | `opponents.add/update/remove/addNote` |
 | 전술보드 | 준비 모드 — 필드 SVG·라인업 후보·상대 메모 패널·드래그·화살표·세트피스·PNG. 경기 모드(S4) — 고대비 세로 폰 화면·잠금·Wake Lock·핀 탭 교체·빠른 지시 프리셋 | `matches.sorted()`, `matches.byId().boardSnapshot/substitutions`, `opponents.all()`, `members.active()`, `availableToday()` | 준비 모드 `matches.update(id, { boardSnapshot })`(저장을 눌러야 씀) / 경기 모드 `matches.update(id, { boardSnapshot, substitutions })`(변경마다 자동) |
 | 경기 | 목록·만들기·라인업·결과 입력 | `matches.sorted()`, `opponents.all()`, `members.active()` | `matches.add/update/remove` (저장할 때마다 상대 전적 자동 재계산) |
+| 훈련(S5) | 팀 훈련 — 세션 목록·만들기(드릴 담기·참가자·메모)·드릴 라이브러리 관리. 개인 훈련 — 회원별 이번 주 과제(규칙 기반 추천·완료 체크·감독 확인)·지난 주 이력 | `trainingSessions.sorted()`, `drills.all/visible/byCategory()`, `personalPlans.current/byMember()`, `members.active()`, `availableToday()` | `trainingSessions.add/update/remove`, `drills.add/update/setHidden`(삭제 없음), `personalPlans.add/update/setTaskDone/recommend()` |
 
 - 버전 스탬프: `app.js APP_VERSION` = `store.js`/`env.js`/`drafts.js` 의 `MODULE_VERSION` = `sw.js VERSION`.
   네 값이 어긋나면 부팅 때 `checkModuleVersions()` 가 캐시를 비우고 다시 받는다. 화면 표식은 상단 우측(`#topbar-sub`).
+
+## 11. 훈련 — 드릴 · 팀 훈련 세션 · 개인 훈련 과제 (S5, 2026-09-29 구현)
+
+### 11-1. Drill — 드릴 라이브러리
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string | `dr_xxx`. 기본 15개는 id 가 고정(`dr_pass_01` 등)이라 여러 기기에서 올려도 중복 시딩되지 않는다 |
+| `category` | `pass`\|`press`\|`transition`\|`setpiece`\|`fitness`\|`gk` | `DRILL_CATEGORIES`(패스·압박·전환·세트피스·체력·GK) 중 하나 |
+| `name` | string | 드릴 이름 |
+| `desc` | string | 설명(2줄 정도, 최대 200자) |
+| `minutes` | number | 소요 분(기본값 — 세션에 담을 때 그대로 복사되고, 세션 안에서 따로 조정 가능) |
+| `players` | string | 필요 인원 메모 (예: "4인 이상") |
+| `equipment` | string | 필요 장비 메모 |
+| `hidden` | boolean | **삭제가 없다** — 지난 세션·과제가 이 드릴을 참조하므로 숨김만 있다. 숨겨도 `byId()` 조회는 그대로 되고, 새로 담을 목록(`visible()`)에서만 빠진다 |
+| `createdAt` / `updatedAt` | ISO string | |
+
+앱을 처음 열 때(`emptyState()`) 초기 15개가 자동으로 채워진다(`DEFAULT_DRILLS`, `store.js`). 카테고리 분포:
+패스 3 · 압박 2 · 전환 2 · 세트피스 3 · 체력 3 · GK 2.
+직접 추가(`drills.add`)·수정(`drills.update`)·숨김(`drills.setHidden`)은 훈련 탭 → 드릴 라이브러리 관리에서 한다.
+
+### 11-2. TrainingSession — 팀 훈련 세션
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string | `ts_xxx` |
+| `date` | string | `YYYY-MM-DD` |
+| `theme` | string | 주제 (예: "패스+체력") |
+| `minutes` | number | 목표 총 시간(분). 기본 60, 1~240 사이로 클램프 |
+| `drills` | `[{ drillId, minutes }]` | 담긴 드릴과 그 세션에서의 소요 분(드릴 기본값을 복사해 오되 조정 가능). 합계는 화면에서 목표 시간과 비교해 보여 준다(`trainingSessionDrillMinutes()`) |
+| `attendees` | `memberId[]` | 참가자. 세션 만들기 때 **오늘 출석("오늘 가능 선수")과 연동**해 기본값을 채우고, 이후엔 직접 추가/제외 가능 |
+| `notes` | string | 진행 후 메모 (최대 1000자) |
+| `createdAt` / `updatedAt` | ISO string | |
+
+회원을 삭제하면 `attendees` 목록에서는 빠진다(출석 표시의 연장선 — `members.remove()`).
+드릴을 숨겨도 이미 담긴 `drills[].drillId` 참조는 그대로 남는다(위 11-1 숨김 원칙).
+
+### 11-3. PersonalPlan — 개인 훈련 과제
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string | `pp_xxx` |
+| `memberId` | string | 회원 id. **회원을 삭제해도 이 값은 그대로 남는다** — 과제 자체를 지우지 않는다(데이터 손실 0). 화면은 `members.byId()` 가 못 찾으면 "탈퇴 선수"로 표시한다 |
+| `weekOf` | string | 그 주의 월요일(`YYYY-MM-DD`, `weekMondayOf()`). "이번 주"는 `currentWeekMonday()` |
+| `tasks` | `[Task]` | 과제 목록(최대 없음, 실제로는 추천이 6개 이하) |
+| `coachCheck` | boolean | 감독 확인 여부 |
+| `createdAt` / `updatedAt` | ISO string | |
+
+**Task**: `{ drillId, text, target, testKey, baseline, done, doneAt }`
+- `drillId` 가 있으면 드릴 라이브러리에서 온 과제, 없으면 `text` 로 직접 입력한 과제(둘 중 하나는 있어야 저장된다).
+- `target`: 목표 문구(예: "9.1초 이내 목표"). 자유 텍스트.
+- `testKey`/`baseline`: 측정 종목(`shuttle20`/`run1500`) 기반 과제일 때만 채워진다. `baseline` = 추천을 만든 시점의 기록(초).
+  화면은 `member.tests[testKey].sec` 를 다시 읽어 `baseline` 과 비교해 **재측정 전후 변화**를 보여 준다(9-1의 `analyzeMemberName` 과 같은 "화면이 매번 다시 계산" 원칙).
+- `done`/`doneAt`: 완료 체크와 그 시각.
+
+**추천 로직 (`recommendTasksFor()`, 규칙 기반 — AI 아님)**:
+1. 간단 체크 6항목 중 **평가된 것 가운데 가장 낮은 2항목**(`weakestAbilities()`, 미평가 항목은 후보에서 제외)을 고른다.
+2. 항목 → 드릴 카테고리 매핑(`ABIL_DRILL_CATEGORY`): 스피드·지구력→체력, 기본기→패스, 슈팅→세트피스, 수비→압박, 피지컬→전환.
+3. GK 회원(`member.gk` 또는 `pos==='GK'`)이면 GK 카테고리 드릴을 하나 우선 포함한다.
+4. 각 카테고리에서 숨기지 않은 드릴 1개씩 골라 과제로 추가한다(중복 없이).
+5. `shuttle20`/`run1500` 측정 기록이 있으면 "재측정" 과제를 추가한다 — 목표는 현재 기록보다 살짝 빠른 값(20m 왕복 -0.3초, 1.5km -8초, 하한 있음).
+6. 최대 6개까지. 이 배열은 **저장 없이 반환만** 한다 — "이번 주 과제 만들기"를 눌러야 `personalPlans.add()` 로 저장된다.
+
+과제 이력(`personalPlans.byMember()`)은 최신 주가 먼저 오고, 지난 주 항목을 눌러 읽기 전용으로 볼 수 있다(완료 체크·삭제 버튼 없이 완료/미완료 상태만 표시).
+
+### 11-4. 가져오기(JSON) — drills·trainingSessions·personalPlans
+
+합치기(기본)에서 세 컬렉션 모두 **id 로 합친다**(처음 보는 id 만 추가) — 기본 드릴 15개는 기기 간 id 가 고정이라
+합쳐도 중복되지 않는다. `trainingSessions.attendees`/`drills[].drillId`, `personalPlans.memberId`/`tasks[].drillId` 는
+회원·상대·경기와 같은 방식으로 **이 기기 기준 id 로 다시 이어 붙인다**(`store.js importJSON()` 의 `remap`/`remapDrill`).
