@@ -211,6 +211,7 @@ const GUARD = '제공된 데이터에 없는 사실(이름·기록·결과·부�
 
 /** 간단 체크 6항목 중 입력된 것만 (스피드/지구력/기본기/슈팅/수비/피지컬, 각 1~5) */
 /** 기준표 요약 (남/여 5점·3점·1점만) + 측정 종목 */
+/* S2~S5 프롬프트에서 다시 쓴다 (v1.0 에서는 호출부 없음) */
 function rubricBrief(store) {
   const out = {};
   for (const g of ['male', 'female']) {
@@ -242,7 +243,6 @@ function memberBrief(m, store) {
     실력: m.skill,
     포지션: m.pos,
     GK: !!m.gk,
-    소속: m.team ? store.club.teamName(m.team) : '미배정',
     나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null,
     성별: m.gender || null,
     능력치: abilBrief(m),
@@ -254,19 +254,15 @@ export function buildClubContext(store, { matchId = null, includeMembers = true 
   const ctx = {
     모임: store.get().club.name,
     전체회원수: store.members.active().length,
-    혼성팀: store.club.mixedTeams().map((k) => store.club.teamName(k)),
-    여성_혼성팀_고정: store.club.lockWomen(),
+    한팀_기본인원: store.club.squadSize(),
   };
   if (includeMembers) ctx.회원 = store.members.active().map((m) => memberBrief(m, store));
   if (matchId) {
     const g = store.matches.byId(matchId);
     if (g) {
-      const att = store.matches.teamAttendance(g.id);
       ctx.경기 = {
         날짜: g.date, 시간: g.time, 장소: g.place || '미정', 상태: g.status,
-        참석자수: store.matches.attendees(g.id).length,
-        팀별참석: Object.fromEntries(store.club.teamKeys().map((k) => [store.club.teamName(k), att[k].map((m) => m.name)])),
-        미배정참석: att.none.map((m) => m.name),
+        참석자: store.matches.attendees(g.id).map((m) => m.name),
       };
     }
   }
@@ -274,53 +270,10 @@ export function buildClubContext(store, { matchId = null, includeMembers = true 
 }
 
 /* ---------------- 기능별 프롬프트 ---------------- */
+/* v1.0: 내부 팀 나누기(teamCoachPrompt)는 기능이 사라져 함께 뺐다.
+ * S5 에서 "상대 카드 + 우리 라인업" 을 보는 코치 프롬프트로 다시 들어온다. */
 
-/** 1) AI 팀 코치 */
-export function teamCoachPrompt({ store, matchId, candidates, groupCount }) {
-  const g = store.matches.byId(matchId);
-  const att = store.matches.teamAttendance(matchId);
-  const teams = {};
-  for (const k of store.club.teamKeys()) {   // v0.7.0: 팀 수 가변 (학생팀 포함)
-    if (!att[k].length) continue;
-    teams[store.club.teamName(k)] = att[k].map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 성별: m.gender || null, 능력치: abilBrief(m) }));
-  }
-  if (att.none.length) teams['미배정'] = att.none.map((m) => ({ 이름: m.name, 실력: m.skill, 포지션: m.pos, GK: !!m.gk, 나이: m.birthYear ? new Date().getFullYear() - m.birthYear : null, 성별: m.gender || null, 능력치: abilBrief(m) }));
-
-  const mixed = store.club.mixedTeams().map((k) => store.club.teamName(k));
-  const lockWomen = store.club.lockWomen();
-  const data = {
-    경기: { 날짜: g.date, 장소: g.place || '미정' },
-    오늘팀수: groundCountSafe(groupCount),
-    팀당_기본_인원: store.club.squadSize(),
-    혼성팀: mixed,
-    여성_혼성팀_고정: lockWomen,
-    혼성_환산_계수: store.club.mixedFactor(),
-    평가_기준표: rubricBrief(store),
-    소속팀별참석자: teams,
-    앱이_계산한_합치기후보: (candidates || []).map((c) => ({
-      묶음: c.groups.map((grp) => grp.map((k) => (k === 'none' ? '미배정' : store.club.teamName(k))).join('+')),
-      전력합: c.stats.map((s) => s.total),
-      인원: c.stats.map((s) => s.size),
-      GK수: c.stats.map((s) => s.gk),
-    })),
-  };
-  return {
-    system: `${APP_SELF}당신은 한국 동호회 축구 모임의 팀 편성 코치입니다.
-평가 기준은 남녀가 다릅니다 — 여성 회원의 점수는 "여성 회원끼리 비교 + 혼성 경기" 기준으로 매겨진 값입니다.
-전력을 합칠 때는 아래 혼성 환산 계수가 이미 반영된 점수를 쓰세요. 실력(1~5)·포지션·GK 유무·인원을 고려해 오늘 경기의 팀을 추천합니다. ${GUARD}
-반드시 아래 JSON 하나만 출력하세요. 설명 문장은 JSON 안에만 넣습니다.
-{"teams":[{"name":"팀 이름","members":["이름",...]}],"reasons":["이유 3줄"],"cautions":["주의점"]}
-- members 에는 제공된 참석자 이름만, 한 사람은 한 팀에만 넣습니다. 전원을 배정하세요.
-- 팀 수는 "오늘팀수"와 같아야 합니다.
-- reasons 는 정확히 3개, cautions 는 1~3개(GK 공백·전력 쏠림·인원 차이 등).
-${lockWomen ? '- **여성 회원(성별 "여")은 모두 같은 팀(혼성팀 또는 혼성팀이 포함된 묶음)에 넣으세요.** 다른 팀으로 나누지 마세요.' : '- 성별은 고려하지 않아도 됩니다.'}`,
-    messages: [{ role: 'user', content: JSON.stringify(data, null, 1) }],
-    maxTokens: 1500,
-  };
-}
-function groundCountSafe(n) { return Math.max(2, Math.min(4, Number(n) || 3)); }
-
-/** 2) AI 전술 추천 */
+/** 2) AI 전술 추천 — 전술보드(S3)에서 다시 배선한다 */
 export function tacticsPrompt({ players, teamLabel, formations, note }) {
   const data = {
     팀: teamLabel,
@@ -342,21 +295,18 @@ export function tacticsPrompt({ players, teamLabel, formations, note }) {
   };
 }
 
-/** 3) 공지문 / 총평 */
+/** 3) 공지문 / 총평 — 경기 탭(S2)에서 다시 배선한다 */
 export function noticePrompt({ store, matchId, mode = 'notice', tone = '짧게' }) {
   const ctx = buildClubContext(store, { matchId, includeMembers: false });
   const g = store.matches.byId(matchId);
-  const plan = g?.teams?.length
-    ? g.teams.map((ids, i) => ({
-      팀: (g.teamPlan?.groups?.[i] || []).map((k) => (k === 'none' ? '미배정' : store.club.teamName(k))).join('+') || `${i + 1}조`,
-      선수: ids.map((id) => store.members.byId(id)?.name).filter(Boolean),
-    }))
+  const plan = g?.lineup?.slots?.length
+    ? [{ 포메이션: g.lineup.formation || '미정', 선수: g.lineup.slots.map((id) => store.members.byId(id)?.name).filter(Boolean) }]
     : null;
   const toneGuide = { '짧게': '3~5줄로 짧고 담백하게', '유쾌하게': '친근하고 유쾌하게, 이모지 2~3개까지', '정중하게': '정중한 존댓말로 단정하게' }[tone] || '짧고 담백하게';
   return {
     system: `${APP_SELF}당신은 축구 동호회 총무입니다. 단톡방에 그대로 붙여넣을 한국어 ${mode === 'review' ? '경기 총평' : '경기 공지문'}을 씁니다.
 ${toneGuide} 쓰세요. 제목 줄 + 본문 형식, 마크다운 표는 쓰지 마세요. ${GUARD}
-${mode === 'review' ? '결과 데이터가 없으면 점수·득점자를 지어내지 말고 참석·팀 구성 중심으로 씁니다.' : '준비물·시간·장소는 제공된 값만 씁니다.'}
+${mode === 'review' ? '결과 데이터가 없으면 점수·득점자를 지어내지 말고 참석 중심으로 씁니다.' : '준비물·시간·장소는 제공된 값만 씁니다.'}
 JSON 없이 본문만 출력하세요.`,
     messages: [{ role: 'user', content: JSON.stringify({ ...ctx, 오늘의팀: plan }, null, 1) }],
     maxTokens: 1200,

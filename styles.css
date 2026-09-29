@@ -773,3 +773,88 @@ a.btn { text-decoration: none; }
 .team-grid > .tstat:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .hero .teamline { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .hero .tcell { min-width: 52px; }
+
+/* ================= v1.0.0-alpha — 우리팀 탭 · 자리표시 탭 =================
+   2026-09-29 S1: 하단 탭 4개(우리팀·상대팀·전술보드·경기) 구조로 개편.
+   따뜻한 바탕 + 악센트 1색 유지, 폰 한 손 조작(터치 44px 이상)을 기준으로 잡았다. */
+
+/* 상단 빌드 표식 · 설정 버튼 */
+.topbar .sub.build { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.topbar .topbtn {
+  flex: 0 0 34px; width: 34px; height: 34px; margin-left: 8px;
+  border-radius: 11px; background: var(--surface-2); border: 1px solid var(--line);
+  font-size: 16px; line-height: 1; color: var(--text-2);
+}
+.topbar .topbtn:active { background: var(--bg-2); }
+
+/* 오늘 카드 (출석 체크) */
+.todaycard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 13px 13px 12px; box-shadow: var(--shadow); margin-bottom: 4px;
+}
+.todaycard .tc-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.todaycard .tc-top b { font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
+.todaycard .tc-avail { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--text-3); }
+.todaycard .tc-avail i { font-style: normal; font-weight: 900; color: var(--accent); font-size: 14px; }
+.todaycard .tc-avail em { font-style: normal; color: var(--warn); font-weight: 800; }
+.todaycard .tc-done {
+  margin-top: 9px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--accent-soft); color: var(--accent-ink); font-size: 12.5px; font-weight: 700;
+}
+
+/* v1.0 업데이트 안내 (자동 백업 · 되돌리기) */
+.migratecard {
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--r);
+  padding: 13px; margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.migratecard .mc-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.migratecard .mc-top b { font-size: 14.5px; font-weight: 800; color: var(--accent-ink); }
+.migratecard .mc-top .dim { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-weight: 700; }
+.migratecard .mc-body { font-size: 13px; color: var(--text-2); line-height: 1.65; }
+
+/* 명단 줄 — 왼쪽(회원 열기) + 오른쪽(오늘 출석) */
+.att-item.off { opacity: .5; }
+.att-item .mr-main {
+  display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0;
+  background: none; border: 0; padding: 0; text-align: left; color: inherit;
+}
+.att-item .mr-main .nm .sub { flex-wrap: wrap; }
+.att-item .nm .skillnum { font-weight: 800; color: var(--text-2); }
+
+/* 필터 칩 */
+.filterchips { display: flex; gap: 7px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: none; }
+.filterchips::-webkit-scrollbar { display: none; }
+.filterchips button {
+  flex: 0 0 auto; padding: 9px 13px; min-height: 38px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line);
+  font-size: 12.5px; font-weight: 800; color: var(--text-2); white-space: nowrap;
+}
+.filterchips button[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+
+/* 자리표시 탭 (S2~S4) */
+.phcard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 22px 18px; margin-top: 14px; box-shadow: var(--shadow);
+}
+.phcard .ph-stage {
+  display: inline-block; padding: 5px 11px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-ink);
+  font-size: 11.5px; font-weight: 900; letter-spacing: .02em; margin-bottom: 12px;
+}
+.phcard .ph-title { font-size: 21px; font-weight: 900; letter-spacing: -.03em; margin-bottom: 8px; }
+.phcard .ph-lead { font-size: 13.5px; color: var(--text-2); line-height: 1.7; margin-bottom: 14px; }
+.phcard .ph-list { margin: 0 0 16px; padding: 0; list-style: none; }
+.phcard .ph-list li {
+  position: relative; padding: 8px 0 8px 20px; font-size: 13.5px; font-weight: 600;
+  color: var(--text); border-top: 1px solid var(--line);
+}
+.phcard .ph-list li:first-child { border-top: 0; }
+.phcard .ph-list li::before {
+  content: ''; position: absolute; left: 4px; top: 15px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.phcard .ph-when { font-size: 12px; font-weight: 800; color: var(--text-3); }
+
+#settings-anchor { height: 1px; margin-top: 18px; }

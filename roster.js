@@ -48,7 +48,7 @@ export function looksLikeName(s) {
  * - 쉼표·슬래시·가운뎃점으로도 나눈다
  */
 export function parseRoster(text, { defaultSection = 'in', parseLine = null } = {}) {
-  // info[이름] = { pos, gk, gender, birthYear, team } — 새 회원으로 추가할 때 그대로 쓴다 (v0.6.1)
+  // info[이름] = { pos, gk, gender, birthYear } — 새 회원으로 추가할 때 그대로 쓴다 (v0.6.1)
   const out = { in: [], out: [], maybe: [], info: {} };
   const seen = { in: new Set(), out: new Set(), maybe: new Set() };
   let section = defaultSection;
@@ -106,17 +106,17 @@ export function parseRoster(text, { defaultSection = 'in', parseLine = null } = 
       if (!looksLikeName(name) && typeof parseLine === 'function') {
         const r = parseLine(name);
         if (r && r.name && looksLikeName(r.name)) {
-          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null, team: r.team || null };
+          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null };
           name = r.name;
         }
       } else if (typeof parseLine === 'function') {
-        // 이름처럼 보여도 팀 약자·포지션이 섞였을 수 있다 ("청 김철수", "김철수 GK")
+        // 이름처럼 보여도 포지션·나이가 섞였을 수 있다 ("김철수 GK", "김철수 85")
         const r = parseLine(name);
         // "홍길동,85,골키퍼" 를 쉼표로 쪼개면 "골키퍼" 만 남는다 — 정보 단어뿐인 조각은 사람이 아니다
-        if (r && !r.name && (r.pos || r.gender || r.birthYear || r.team)) continue;
+        if (r && !r.name && (r.pos || r.gender || r.birthYear)) continue;
         if (r && r.name && r.name !== name && looksLikeName(r.name)
-          && (r.pos || r.team || r.gender || r.birthYear)) {
-          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null, team: r.team || null };
+          && (r.pos || r.gender || r.birthYear)) {
+          info = { pos: r.pos || null, gk: !!r.gk, gender: r.gender || null, birthYear: r.birthYear || null };
           name = r.name;
         }
       }

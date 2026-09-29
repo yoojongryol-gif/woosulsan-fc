@@ -1,4 +1,6 @@
-/* v0.5.0 테스트 — 명단 파서 · 매칭 · 성별 · 혼성팀 고정 (node dev/test-roster.mjs) */
+/* 명단 파서 · 이름 매칭 테스트 (node dev/test-roster.mjs)
+ * v1.0(2026-09-29 S1): 혼성팀 고정·감독 지정 검증은 기능과 함께 내려갔다
+ *   (dev/parked/test-teams-v0.7.mjs 참고). 여기에는 파서·매칭만 남는다. */
 let pass = 0; let fail = 0;
 function ok(name, cond, extra = '') {
   if (cond) { pass += 1; console.log(`  PASS  ${name}${extra ? ' — ' + extra : ''}`); }
@@ -13,7 +15,6 @@ globalThis.localStorage = {
 
 const { parseRoster, matchNames, looksLikeName, chosung } = await import('../roster.js');
 const { createStore, parseMemberLine, parseGender } = await import('../store.js');
-const { balanceTeams, suggestMerges, groupStat } = await import('../balance.js');
 
 console.log('\n[1] 붙여넣기 파서');
 // v0.6.1: 결과에 info(이름별 포지션 등)가 추가돼, 목록 비교는 세 구간만 본다
@@ -65,76 +66,8 @@ ok('둘 다 없음', (() => { const p = parseMemberLine('홍길동'); return p.n
 
 const store = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
 await store.init();
-ok('기본 혼성팀 고정 ON', store.club.lockWomen() === true);
-ok('기본 혼성팀 = 체육(D) (v0.5.4 사장님 확정)', store.club.mixedTeams().join() === 'D', store.club.mixedTeams().join());
-store.club.setMixed('D', true);
-ok('혼성팀 지정', store.club.isMixed('D') && !store.club.isMixed('A'));
-
-console.log('\n[4] 혼성팀 고정 규칙');
-{
-  // A/B/C 남자 6명씩, D 혼성(남3 여3)
-  const teams = { A: [], B: [], C: [], D: [] };
-  let i = 0;
-  for (const k of ['A', 'B', 'C']) {
-    for (let j = 0; j < 6; j += 1) { i += 1; teams[k].push(store.members.add({ name: `${k}${j}`, skill: 1 + (i % 5), team: k, gender: '남' })); }
-  }
-  for (let j = 0; j < 3; j += 1) { i += 1; teams.D.push(store.members.add({ name: `D남${j}`, skill: 1 + (i % 5), team: 'D', gender: '남' })); }
-  for (let j = 0; j < 3; j += 1) { i += 1; teams.D.push(store.members.add({ name: `D여${j}`, skill: 1 + (i % 5), team: 'D', gender: '여' })); }
-
-  const g = store.matches.add({ date: '2026-09-24', teamCount: 3 });
-  store.members.active().forEach((m) => store.matches.setAttendance(g.id, m.id, 'in'));
-  const att = store.matches.teamAttendance(g.id);
-  ok('참석 24명 · 여성 3명', store.matches.attendees(g.id).length === 24 && att.D.filter((m) => m.gender === '여').length === 3);
-
-  // (1) 합치기 제안 = 팀 단위 분할이라 여성이 흩어지지 않음
-  const byTeam = {}; for (const k of ['A', 'B', 'C', 'D']) byTeam[k] = att[k];
-  const sug = suggestMerges(byTeam, 3);
-  const womenSplit = sug.some((cand) => {
-    const counts = cand.players.map((list) => list.filter((m) => m.gender === '여').length).filter((n) => n > 0);
-    return counts.length > 1;
-  });
-  ok('합치기 제안 — 모든 후보에서 여성이 한 묶음', !womenSplit, `후보 ${sug.length}개`);
-  const stats = sug[0].players.map(groupStat);
-  ok('groupStat 남녀 집계', stats.reduce((a, s) => a + s.female, 0) === 3 && stats.reduce((a, s) => a + s.male, 0) === 21,
-    stats.map((s) => `남${s.male}여${s.female}`).join(' '));
-
-  // (2) 완전 새로 섞기 + lock
-  const attendees = store.matches.attendees(g.id);
-  const women = attendees.filter((m) => m.gender === '여');
-  const lock = Object.fromEntries(women.map((m) => [m.id, 0]));
-  const r1 = balanceTeams(attendees, 3, { seed: 5, lock });
-  const dist = r1.teams.map((t) => t.filter((p) => p.gender === '여').length);
-  ok('섞기(고정 ON) — 여성 전원 한 팀', dist[0] === 3 && dist[1] === 0 && dist[2] === 0, `여성 분포 ${dist.join('/')}`);
-  ok('섞기(고정 ON) — 인원 균등 유지', Math.max(...r1.stats.map((s) => s.size)) - Math.min(...r1.stats.map((s) => s.size)) <= 1,
-    r1.stats.map((s) => s.size).join('/'));
-  ok('섞기(고정 ON) — 전력 편차 ≤ 4', r1.spread <= 4, `차 ${r1.spread} (${r1.stats.map((s) => s.total).join('/')})`);
-
-  // (3) 고정 OFF (lock 없음) → 성별 무시, 흩어질 수 있음
-  const r2 = balanceTeams(attendees, 3, { seed: 5 });
-  ok('섞기(고정 OFF) — 정상 동작', r2.teams.flat().length === 24 && r2.spread <= 3, `차 ${r2.spread}`);
-
-  // (4) 4팀 섞기 (v0.3.0 clamp 버그 수정 확인)
-  ok('4팀 섞기 = 4묶음', balanceTeams(attendees, 4, { seed: 7 }).teams.length === 4);
-
-  // (5) AI 적용 보정 로직 (여성 흩어진 결과 → 한 팀으로)
-  const aiTeams = [
-    { name: '1조', ids: [women[0].id, ...attendees.filter((m) => m.gender === '남').slice(0, 7).map((m) => m.id)] },
-    { name: '2조', ids: [women[1].id, ...attendees.filter((m) => m.gender === '남').slice(7, 14).map((m) => m.id)] },
-    { name: '3조', ids: [women[2].id, ...attendees.filter((m) => m.gender === '남').slice(14, 21).map((m) => m.id)] },
-  ];
-  const womenIds = women.map((m) => m.id);
-  const target = aiTeams.reduce((best, t, idx) => {
-    const c = t.ids.filter((id) => womenIds.includes(id)).length;
-    return c > best.c ? { i: idx, c } : best;
-  }, { i: 0, c: -1 }).i;
-  const fixed = aiTeams.map((t, idx) => ({
-    ...t,
-    ids: idx === target ? [...new Set([...t.ids, ...womenIds])] : t.ids.filter((id) => !womenIds.includes(id)),
-  }));
-  const fdist = fixed.map((t) => t.ids.filter((id) => womenIds.includes(id)).length);
-  ok('AI 적용 보정 — 여성 한 팀으로', fdist.filter((n) => n > 0).length === 1 && Math.max(...fdist) === 3, fdist.join('/'));
-  ok('AI 적용 보정 — 인원 보존', fixed.reduce((a, t) => a + t.ids.length, 0) === 24);
-}
+for (const n of ['여선수1', '여선수2', '여선수3']) store.members.add({ name: n, gender: '여' });
+ok('성별 저장', store.members.all().filter((m) => m.gender === '여').length === 3);
 
 console.log('\n[5] 마이그레이션 · JSON 왕복');
 {
@@ -142,85 +75,17 @@ console.log('\n[5] 마이그레이션 · JSON 왕복');
   await s2.init();
   await s2.importJSON(JSON.stringify({ members: [{ id: 'x', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
   ok('옛 데이터 성별 = 미입력', s2.members.all()[0].gender === null);
-  ok('옛 데이터 → 체육 혼성팀 기본 지정 · 고정 ON', s2.club.mixedTeams().join() === 'D' && s2.club.lockWomen() === true);
+  ok('옛 데이터도 클럽 설정 기본값', s2.club.squadSize() === 11 && s2.club.rubric('male').speed.length === 5);
 
   const s3 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
   await s3.init();
   await s3.importJSON(store.exportJSON());
   ok('JSON 왕복 — 성별 보존', s3.members.all().filter((m) => m.gender === '여').length === 3);
-  ok('JSON 왕복 — 혼성팀/고정 설정 보존', s3.club.isMixed('D') && s3.club.lockWomen() === true);
-  store.club.setLockWomen(false);
-  const s4 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s4.init();
-  await s4.importJSON(store.exportJSON());
-  ok('JSON 왕복 — 고정 OFF 도 보존', s4.club.lockWomen() === false);
 }
-
-console.log('\n[6] 감독 (v0.5.1)');
-{
-  const s5 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s5.init();
-  const a1 = s5.members.add({ name: 'A감독', team: 'A', skill: 3 });
-  const a2 = s5.members.add({ name: 'A선수', team: 'A', skill: 2 });
-  const b1 = s5.members.add({ name: 'B감독', team: 'B', skill: 4 });
-  ok('기본 감독 없음', s5.club.coach('A') === null && Object.values(s5.club.coaches()).every((v) => v === null));
-
-  s5.club.setCoach('A', a1.id);
-  s5.club.setCoach('B', b1.id);
-  ok('감독 지정', s5.club.coach('A') === a1.id && s5.club.coachTeamOf(b1.id) === 'B');
-  ok('감독 아닌 회원', s5.club.coachTeamOf(a2.id) === null);
-  ok('불일치 없음', s5.club.coachMismatches().length === 0);
-
-  s5.members.update(a1.id, { team: 'C' });
-  const mis = s5.club.coachMismatches();
-  ok('감독이 다른 팀으로 이동 → 안내', mis.length === 1 && mis[0].key === 'A' && mis[0].reason === 'moved', JSON.stringify(mis.map((x) => x.key + ':' + x.reason)));
-  s5.members.update(a1.id, { team: 'A' });
-  ok('되돌리면 안내 사라짐', s5.club.coachMismatches().length === 0);
-
-  s5.members.update(b1.id, { active: false });
-  ok('비활동 감독도 안내', s5.club.coachMismatches().some((x) => x.reason === 'inactive'));
-  s5.members.update(b1.id, { active: true });
-
-  s5.club.setCoach('A', null);
-  ok('감독 해제', s5.club.coach('A') === null);
-  s5.club.setCoach('A', a1.id);
-
-  // 평가 메타
-  const before = s5.members.byId(a2.id);
-  ok('평가 전 메타 없음', !before.skillUpdatedAt && !before.skillUpdatedBy);
-  s5.members.setSkill(a2.id, 5, 'coach:A');
-  const after = s5.members.byId(a2.id);
-  ok('감독 평가 → skill + 메타', after.skill === 5 && after.skillUpdatedBy === 'coach:A' && !!after.skillUpdatedAt);
-  s5.members.setAbil(a2.id, { speed: 4, defense: 2 }, 'coach:A');
-  const after2 = s5.members.byId(a2.id);
-  ok('간단 체크 평가 + 메타', after2.abil.speed === 4 && after2.abil.defense === 2 && after2.abilUpdatedBy === 'coach:A');
-  ok('setAbil 은 나머지 항목 유지', after2.abil.shoot === null);
-
-  // 감독 회원 삭제 → 자리 비움
-  s5.members.remove(a1.id);
-  ok('감독 회원 삭제 시 자리 비움', s5.club.coach('A') === null);
-
-  // JSON 왕복
-  s5.club.setCoach('B', b1.id);
-  const s6 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s6.init();
-  await s6.importJSON(s5.exportJSON());
-  ok('JSON 왕복 — 감독 보존', s6.club.coach('B') === b1.id);
-  ok('JSON 왕복 — 평가 메타 보존', s6.members.byId(a2.id)?.skillUpdatedBy === 'coach:A');
-
-  // 마이그레이션
-  const s7 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s7.init();
-  await s7.importJSON(JSON.stringify({ members: [{ id: 'z', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
-  ok('옛 데이터 — 감독 없음·메타 없음', s7.club.coach('A') === null && s7.members.all()[0].skillUpdatedAt === null);
-}
-
 
 console.log('\n[v0.6.1] 명단 줄에 포지션·나이가 붙어 있어도 읽는다 (라이브 실측 재현, 가명)');
 {
-  const TN = { A: '교역', B: '장년', C: '청년', D: '체육' };
-  const TA = { A: '교', B: '장', C: '청', D: '체' };
-  const PL = (ln) => parseMemberLine(ln, { teamNames: TN, teamAliases: TA });
+  const PL = (ln) => parseMemberLine(ln);
   const text = [
     '1. 한가람 포워드',
     '2. 윤다솜 87 여 미들',
@@ -239,7 +104,7 @@ console.log('\n[v0.6.1] 명단 줄에 포지션·나이가 붙어 있어도 읽�
     && r.info['서보라']?.pos === 'FW' && r.info['배준호']?.pos === 'DF' && r.info['한별']?.pos === 'FW',
     JSON.stringify(r.info));
   ok('GK 는 gk 표시까지', r.info['김철수']?.gk === true && r.info['김철수']?.pos === 'GK');
-  ok('팀 약자 보존', r.info['김철수']?.team === 'C');
+  ok('이름 앞 군더더기 한 글자는 떼고 이름만', r.in.includes('김철수') && !r.in.includes('청 김철수'));
   ok('나이·성별 보존', r.info['윤다솜']?.birthYear === 1987 && r.info['윤다솜']?.gender === '여');
   ok('괄호 안 포지션은 괄호 제거 규칙대로 이름만', r.in.includes('홍길동'));
 

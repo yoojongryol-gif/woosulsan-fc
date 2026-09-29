@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <title>축구&amp;joy</title>
-<meta name="description" content="축구&amp;joy — 축구 모임 관리 · 회원·출석·팀 나누기·전술판">
+<meta name="description" content="축구&amp;joy — 우리팀 관리 · 상대 전력 대비 전술보드">
 <meta name="theme-color" content="#1f7a4d" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#14120f" media="(prefers-color-scheme: dark)">
 <meta name="mobile-web-app-capable" content="yes">
@@ -21,25 +21,25 @@
 <div class="app">
   <header class="topbar">
     <span id="brand-logo" class="brand"></span>
-    <h1 id="topbar-title">축구&amp;joy</h1>
+    <h1 id="topbar-title">우리팀</h1>
     <span class="spacer"></span>
-    <span class="sub" id="topbar-sub"></span>
+    <!-- 화면 빌드 표식 — 배포가 실제로 반영됐는지 화면에서 바로 확인한다 -->
+    <span class="sub build" id="topbar-sub">v1.0.0-alpha</span>
+    <button class="topbtn" id="btn-settings" aria-label="설정">⚙</button>
   </header>
 
   <main>
-    <section id="view-home" class="view active"></section>
-    <section id="view-attend" class="view"></section>
-    <section id="view-team" class="view"></section>
-    <section id="view-tactics" class="view"></section>
-    <section id="view-members" class="view"></section>
+    <section id="view-ourteam" class="view active"></section>
+    <section id="view-opponent" class="view"></section>
+    <section id="view-board" class="view"></section>
+    <section id="view-match" class="view"></section>
   </main>
 
   <nav class="tabbar" role="tablist" aria-label="메인 탭">
-    <button role="tab" data-tab="home" data-icon="home" aria-selected="true"><span class="ico"></span>홈</button>
-    <button role="tab" data-tab="attend" data-icon="check" aria-selected="false"><span class="ico"></span>출석</button>
-    <button role="tab" data-tab="team" data-icon="team" aria-selected="false"><span class="ico"></span>팀</button>
-    <button role="tab" data-tab="tactics" data-icon="tactic" aria-selected="false"><span class="ico"></span>전술</button>
-    <button role="tab" data-tab="members" data-icon="member" aria-selected="false"><span class="ico"></span>회원</button>
+    <button role="tab" data-tab="ourteam" data-icon="member" aria-selected="true"><span class="ico"></span>우리팀</button>
+    <button role="tab" data-tab="opponent" data-icon="team" aria-selected="false"><span class="ico"></span>상대팀</button>
+    <button role="tab" data-tab="board" data-icon="tactic" aria-selected="false"><span class="ico"></span>전술보드</button>
+    <button role="tab" data-tab="match" data-icon="ball" aria-selected="false"><span class="ico"></span>경기</button>
   </nav>
 </div>
 

@@ -1,7 +1,7 @@
 {
   "name": "축구&joy",
   "short_name": "축구&joy",
-  "description": "축구 모임 관리 — 회원·출석·팀 나누기·전술판",
+  "description": "우리팀 관리 + 상대 전력 대비 전술보드",
   "lang": "ko",
   "start_url": "./",
   "scope": "./",
@@ -17,7 +17,7 @@
     { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "출석 체크", "url": "./#attend" },
-    { "name": "팀 나누기", "url": "./#team" }
+    { "name": "우리팀", "url": "./#ourteam" },
+    { "name": "전술보드", "url": "./#board" }
   ]
 }

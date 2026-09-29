@@ -2,11 +2,12 @@
  * 원칙: network-first + 버전 스탬프 캐시명.
  * (cache-first + 고정 캐시명 = "옛 화면 고착" 사고 전례 → 금지)
  */
-const VERSION = 'v0.7.0';
+const VERSION = 'v1.0.0-alpha';
 const CACHE = `woosulsan-fc-${VERSION}`;
 const PRECACHE = [
-  './', './index.html', './styles.css', './app.js', './store.js', './balance.js',
-  './tactics.js', './ai.js', './roster.js', './env.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png',
+  './', './index.html', './styles.css', './app.js', './store.js',
+  './ai.js', './roster.js', './env.js', './drafts.js',
+  './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
 self.addEventListener('install', (e) => {

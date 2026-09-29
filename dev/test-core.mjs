@@ -1,5 +1,7 @@
-/* 코어 로직 테스트 (node dev/test-core.mjs) — 브라우저 없이 검증 */
-import { balanceTeams, suggestTeamCount, teamSizeCaps, suggestMerges, suggestGroupCount, groupStat, teamShortage } from '../balance.js';
+/* 코어 로직 테스트 (node dev/test-core.mjs) — 브라우저 없이 검증
+ * v1.0(2026-09-29 S1): 내부 팀 나누기·묶음 제안 검증은 dev/parked/test-teams-v0.7.mjs 로 내려갔다.
+ *   여기에는 v1.0 에서도 살아 있는 것만 남긴다 — 스토어·출석·전술 저장·나이·능력치·측정 환산.
+ */
 
 let pass = 0; let fail = 0;
 function ok(name, cond, extra = '') {
@@ -30,35 +32,6 @@ function makeMembers(n, gkCount = 3) {
   }));
 }
 
-console.log('\n[1] 팀 밸런스');
-for (const [n, tc] of [[18, 3], [22, 3], [14, 2], [21, 3], [25, 3], [9, 2], [7, 2], [35, 3]]) {
-  const players = makeMembers(n, 3);
-  const { teams, stats, spread } = balanceTeams(players, tc, { seed: 42 });
-  const sizes = stats.map((s) => s.size);
-  const totals = stats.map((s) => s.total);
-  const allIds = teams.flat().map((p) => p.id);
-  ok(`${n}명 → ${tc}팀 인원 차 ≤1`, Math.max(...sizes) - Math.min(...sizes) <= 1, `인원 ${sizes.join('/')}`);
-  ok(`${n}명 → ${tc}팀 전력 차 ≤2`, spread <= 2, `전력 ${totals.join('/')} (차 ${spread})`);
-  ok(`${n}명 → ${tc}팀 GK 분산 (팀당 1명 이상)`, stats.every((s) => s.gk >= 1), `GK ${stats.map((s) => s.gk).join('/')}`);
-  ok(`${n}명 → ${tc}팀 인원 보존·중복 없음`, allIds.length === n && new Set(allIds).size === n);
-}
-
-// GK가 팀 수보다 적을 때
-{
-  const { stats } = balanceTeams(makeMembers(18, 1), 3, { seed: 7 });
-  ok('GK 1명뿐이면 한 팀만 GK 보유(오류 없음)', stats.filter((s) => s.gk === 1).length === 1);
-}
-// 매번 다른 조합
-{
-  const p = makeMembers(20, 3);
-  const a = balanceTeams(p, 2).teams[0].map((x) => x.id).sort().join();
-  const b = balanceTeams(p, 2).teams[0].map((x) => x.id).sort().join();
-  const c = balanceTeams(p, 2).teams[0].map((x) => x.id).sort().join();
-  ok('다시 섞기 = 조합이 고정되지 않음', !(a === b && b === c));
-}
-ok('권장 팀 수 14명→2팀 / 18명→3팀', suggestTeamCount(14) === 2 && suggestTeamCount(18) === 3);
-ok('인원 상한 계산 20/3 = 7,7,6', teamSizeCaps(20, 3).join() === '7,7,6');
-
 console.log('\n[2] 스토어 (localStorage 어댑터)');
 const store = createStore();
 await store.init();
@@ -68,15 +41,12 @@ ok('중복 이름 제외', store.members.bulkAdd([KOREAN[0], '새사람']).lengt
 store.members.update(store.members.all()[0].id, { gk: true, skill: 5 });
 ok('회원 수정', store.members.all()[0].gk === true && store.members.all()[0].skill === 5);
 
-const g = store.matches.add({ date: '2026-09-25', time: '20:00', place: '시민운동장', teamCount: 3 });
+const g = store.matches.add({ date: '2026-09-25', time: '20:00', place: '시민운동장' });
 const all = store.members.active();
 for (let i = 0; i < 18; i += 1) store.matches.setAttendance(g.id, all[i].id, 'in');
 for (let i = 18; i < 22; i += 1) store.matches.setAttendance(g.id, all[i].id, 'out');
 ok('참석 18명 집계', store.matches.attendees(g.id).length === 18);
 
-const res = balanceTeams(store.matches.attendees(g.id), 3, { seed: 3 });
-store.matches.setTeams(g.id, res.teams.map((t) => t.map((p) => p.id)), 3);
-ok('팀 저장 3팀 · 18명', store.matches.byId(g.id).teams.flat().length === 18);
 
 const st = store.stats.attendance(all[0].id);
 ok('출석률 계산', st.total === 1 && st.present === 1 && st.rate === 100);
@@ -87,13 +57,15 @@ await store2.init();
 await store2.importJSON(json);
 ok('JSON 내보내기/가져오기 왕복 — 회원 수 동일', store2.members.all().length === store.members.all().length);
 ok('JSON 왕복 — 경기·출석 보존', store2.matches.attendees(store2.matches.all()[0].id).length === 18);
-ok('JSON 왕복 — 팀 보존', store2.matches.all()[0].teams.flat().length === 18);
 try { await store2.importJSON('{"nope":1}'); ok('잘못된 JSON 거부', false); }
 catch (e) { ok('잘못된 JSON 거부', true, e.message); }
 
 store.members.remove(all[0].id);
-ok('회원 삭제 시 출석·팀에서도 제거',
-  store.matches.byId(g.id).teams.flat().length === 17 && !store.matches.byId(g.id).attendance[all[0].id]);
+ok('회원 삭제 시 출석에서도 제거', !store.matches.byId(g.id).attendance[all[0].id]);
+ok('오늘 자리는 날짜로 하나만 만든다', (() => {
+  const t1 = store.matches.today(); const t2 = store.matches.today();
+  return !!t1 && t1.id === t2.id;
+})());
 
 console.log('\n[3] 전술 저장');
 {
@@ -104,90 +76,6 @@ console.log('\n[3] 전술 저장');
   ok('전술 byId 조회', store.tactics.byId(t1.id)?.title === '수정본');
   store.tactics.remove(t1.id);
   ok('전술 삭제', store.tactics.byMatch(g.id).length === 0);
-}
-
-console.log('\n[4] 고정 4팀 · 합치기 제안 (v0.3.0)');
-{
-  // 4팀 소속 30명 중 18명 참석 시나리오
-  const s4 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s4.init();
-  const TEAMS = ['A', 'B', 'C', 'D'];
-  for (let i = 0; i < 30; i += 1) {
-    s4.members.add({ name: '회원' + i, skill: 1 + ((i * 7) % 5), gk: i % 7 === 0, pos: ['FW', 'MF', 'DF'][i % 3], team: TEAMS[i % 4] });
-  }
-  ok('회원 30명 4팀 소속', TEAMS.every((k) => s4.members.byTeam(k).length > 0),
-    TEAMS.map((k) => k + s4.members.byTeam(k).length).join(' '));
-
-  const gm = s4.matches.add({ date: '2026-09-24', place: '시민운동장', teamCount: 3 });
-  const all30 = s4.members.active();
-  // 팀별로 들쭉날쭉한 참석: A6 B3 C5 D4 = 18명
-  const plan = { A: 6, B: 3, C: 5, D: 4 };
-  for (const k of TEAMS) {
-    s4.members.byTeam(k).slice(0, plan[k]).forEach((m) => s4.matches.setAttendance(gm.id, m.id, 'in'));
-  }
-  ok('참석 18명 (A6·B3·C5·D4)', s4.matches.attendees(gm.id).length === 18);
-
-  const att = s4.matches.teamAttendance(gm.id);
-  ok('팀별 참석 집계', TEAMS.map((k) => att[k].length).join('/') === '6/3/5/4', TEAMS.map((k) => att[k].length).join('/'));
-  ok('미배정 0명', att.none.length === 0);
-
-  const short = teamShortage(groupStat(att.B));
-  ok('부족 팀 감지 (B 3명)', short.includes('인원 부족'), short.join(','));
-
-  const byTeam = {}; for (const k of TEAMS) byTeam[k] = att[k];
-  const sug3 = suggestMerges(byTeam, 3);
-  ok('3팀 합치기 후보 6개 (4팀→3묶음)', sug3.length === 6, sug3.length + '개');
-  const best = sug3[0];
-  ok('추천안 = 3묶음·전원 포함', best.groups.length === 3
-    && best.groups.flat().sort().join('') === 'ABCD'
-    && best.stats.reduce((a, x) => a + x.size, 0) === 18,
-    best.groups.map((g) => g.join('+')).join(' / ') + ' 전력 ' + best.stats.map((x) => x.total).join('/'));
-  ok('추천안이 최저 점수', sug3.every((x) => x.score >= best.score));
-  ok('추천안 = 후보 중 전력 편차 최소', best.spread === Math.min(...sug3.map((x) => x.spread)),
-    '추천 차 ' + best.spread + ' / 후보 차 ' + sug3.map((x) => x.spread).join(','));
-  ok('추천안 GK 모든 팀 보유 · 인원 편차 ≤ 2', best.gkMissing === 0 && best.sizeSpread <= 2,
-    'GK ' + best.stats.map((x) => x.gk).join('/') + ' 인원 ' + best.stats.map((x) => x.size).join('/'));
-
-  const sug2 = suggestMerges(byTeam, 2);
-  ok('2팀 합치기 후보 7개', sug2.length === 7, sug2.length + '개');
-  ok('2팀 추천안 전원 포함', sug2[0].stats.reduce((a, x) => a + x.size, 0) === 18);
-
-  const sug4 = suggestMerges(byTeam, 4);
-  ok('4팀 유지 = 합치기 없음', sug4.length === 1 && sug4[0].groups.every((g) => g.length === 1));
-
-  // v0.6.0: 권장 팀 수는 "팀당 기본 인원"(기본 11) 으로 센다
-  ok('권장 팀 수 (11명 기준)', suggestGroupCount(18, 4) === 2 && suggestGroupCount(33, 4) === 3 && suggestGroupCount(44, 4) === 4);
-  ok('권장 팀 수 (5인제 기준)', suggestGroupCount(18, 4, 5) === 3 && suggestGroupCount(12, 4, 5) === 2);
-
-  // 한 팀만 참석 → 제안은 그 팀 하나
-  ok('참석 팀 1개면 묶음도 1개', suggestMerges({ A: att.A }, 3)[0].groups.length === 1);
-
-  // 채택 → 저장 → JSON 왕복
-  s4.matches.setTeams(gm.id, best.players.map((list) => list.map((p) => p.id)), 3,
-    { mode: 'merge', groups: best.groups });
-  const saved = s4.matches.byId(gm.id);
-  ok('확정 저장 (teams + teamPlan)', saved.teams.flat().length === 18 && saved.teamPlan.mode === 'merge'
-    && saved.teamPlan.groups.length === 3);
-
-  const json2 = s4.exportJSON();
-  const s5 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s5.init();
-  await s5.importJSON(json2);
-  const g5 = s5.matches.all()[0];
-  ok('JSON 왕복 — 소속 팀 보존', s5.members.byTeam('A').length === s4.members.byTeam('A').length);
-  ok('JSON 왕복 — 오늘의 팀·합치기 보존', g5.teams.flat().length === 18 && g5.teamPlan.groups.length === 3);
-  ok('JSON 왕복 — 팀 이름 보존', s5.club.teamName('A') === s4.club.teamName('A'));
-
-  // 마이그레이션: team 없는 옛 데이터
-  const s6 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
-  await s6.init();
-  await s6.importJSON(JSON.stringify({ members: [{ id: 'x1', name: '옛회원', skill: 3 }], matches: [], tactics: [] }));
-  ok('마이그레이션 — team 없으면 미배정', s6.members.all()[0].team === null);
-  ok('마이그레이션 — 팀 이름 기본값(v0.5.4: 교역/장년/청년/체육)', s6.club.teamName('D') === '체육');
-
-  // 팀 이름 변경
-  s4.club.setTeamName('A', '레드');
-  ok('팀 이름 변경', s4.club.teamName('A') === '레드');
 }
 
 console.log('\n[5] 나이 (v0.4.1)');
@@ -227,13 +115,8 @@ console.log('\n[5] 나이 (v0.4.1)');
   s2.members.update(added[2].id, { birthYear: 'xx' });
   ok('잘못된 값은 미입력 처리', s2.members.byId(added[2].id).birthYear === null);
 
-  // 팀 평균 나이 (입력된 사람 기준)
-  const players = [{ skill: 3, birthYear: 1990 }, { skill: 3, birthYear: 2000 }, { skill: 3 }];
-  const gs = groupStat(players, new Date('2026-06-01'));
-  ok('평균 나이 = 입력된 사람만', gs.ageAvg === 31 && gs.ageCount === 2 && gs.size === 3, `${gs.ageAvg}세 / ${gs.ageCount}명`);
-  ok('아무도 없으면 null', groupStat([{ skill: 3 }], now).ageAvg === null);
-  // .map(groupStat) 처럼 두 번째 인자가 인덱스로 들어와도 터지지 않아야 한다
-  ok('map(groupStat) 안전', [[{ skill: 3, birthYear: 1990 }], [{ skill: 2 }]].map(groupStat).length === 2);
+  // 나이 표기 (입력된 사람 기준)
+  ok('나이 라벨', ageLabel(1990, new Date('2026-06-01')).includes('36'), ageLabel(1990, new Date('2026-06-01')));
 
   // 마이그레이션 + JSON 왕복
   const s3 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
@@ -251,7 +134,6 @@ console.log('\n[5] 나이 (v0.4.1)');
 console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
 {
   const { ABILITIES, ABILITY_KEYS, normalizeAbil, abilAvg } = await import('../store.js');
-  const { abilAverages } = await import('../balance.js');
   ok('항목 6개 · 순서 고정', ABILITY_KEYS.join() === 'speed,stamina,basic,shoot,defense,physical', ABILITY_KEYS.join());
   ok('라벨', ABILITIES.map((a) => a.label).join() === '스피드,지구력,기본기,슈팅,수비,피지컬');
 
@@ -263,17 +145,10 @@ console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
 
   const s7 = createStore({ load: async () => null, save: async () => true, clear: async () => {} });
   await s7.init();
-  const m1 = s7.members.add({ name: '가', team: 'A', abil: { speed: 5, stamina: 4, defense: 2 } });
-  const m2 = s7.members.add({ name: '나', team: 'A', abil: { speed: 3, defense: 4 } });
-  const m3 = s7.members.add({ name: '다', team: 'A' });
+  const m1 = s7.members.add({ name: '가', abil: { speed: 5, stamina: 4, defense: 2 } });
+  const m2 = s7.members.add({ name: '나', abil: { speed: 3, defense: 4 } });
+  const m3 = s7.members.add({ name: '다' });
   ok('회원 저장 시 정규화', s7.members.byId(m1.id).abil.speed === 5 && s7.members.byId(m3.id).abil.speed === null);
-
-  const avgs = abilAverages([m1, m2, m3]);
-  ok('팀 평균 = 입력된 사람만', avgs.speed === 4 && avgs.stamina === 4 && avgs.defense === 3 && avgs.count === 2,
-    `스피드 ${avgs.speed} 지구력 ${avgs.stamina} 수비 ${avgs.defense} (${avgs.count}명)`);
-  ok('아무도 없으면 null', abilAverages([m3]).speed === null && abilAverages([m3]).count === 0);
-  const gs2 = groupStat([m1, m2, m3]);
-  ok('groupStat 에 능력치 포함', gs2.abil.speed === 4 && gs2.size === 3);
 
   ok('세부 평균 반올림 = 종합 후보', Math.round(abilAvg({ speed: 5, stamina: 4, defense: 4 })) === 4);
   // v0.5.6: 종합 실력 = 간단 체크 평균 자동 (5,4,2 → 3.7)
@@ -297,30 +172,7 @@ console.log('\n[6] 간단 체크 6항목 (v0.4.2)');
 }
 
 
-console.log('\n[v0.6.0] 참석 인원 → 오늘 팀 수 권장');
-{
-  const { recommendGroups, evenSplit, splitStarters } = await import('../balance.js');
-  const r19 = recommendGroups(19, { base: 11 });
-  ok('19명 = 2팀 + 3명 부족', r19.count === 2 && r19.short === 3 && r19.bench === 0, r19.reason);
-  const r22 = recommendGroups(22, { base: 11 });
-  ok('22명 = 2팀 딱 맞음', r22.count === 2 && r22.short === 0 && r22.bench === 0, r22.reason);
-  const r24 = recommendGroups(24, { base: 11 });
-  ok('24명 = 2팀 + 교체 2명', r24.count === 2 && r24.bench === 2, r24.reason);
-  ok('24명 대안 = 3팀 로테이션', r24.alts[0]?.count === 3, JSON.stringify(r24.alts));
-  const r30 = recommendGroups(30, { base: 11 });
-  ok('30명 = 2팀 + 교체 8명', r30.count === 2 && r30.bench === 8, r30.reason);
-  ok('33명 = 3팀', recommendGroups(33, { base: 11 }).count === 3);
-  ok('44명 = 4팀', recommendGroups(44, { base: 11 }).count === 4);
-  ok('50명도 4팀이 최대', recommendGroups(50, { base: 11 }).count === 4);
-  ok('이유 문구에 기준 인원 명시', /11명 기준/.test(r24.reason), r24.reason);
-  ok('참석한 소속 팀 수를 넘지 않음', recommendGroups(44, { base: 11, availableTeams: 2 }).count === 2);
-  ok('5인제 19명 = 3팀', recommendGroups(19, { base: 5 }).count === 3);
-  ok('고른 분배', evenSplit(16, 3).join('·') === '5·5·6' && evenSplit(22, 2).join('·') === '11·11');
-  const sp = splitStarters(['a', 'b', 'c', 'd'], 3);
-  ok('선발/교체 분할', sp.starters.length === 3 && sp.bench.join() === 'd');
-}
-
-console.log('\n[v0.6.0] 성별 평가 기준표 · 혼성 환산 계수');
+console.log('\n[v0.6.0] 성별 평가 기준표 · 한 팀 인원');
 {
   const S = await import('../store.js');
   const s6 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
@@ -337,19 +189,7 @@ console.log('\n[v0.6.0] 성별 평가 기준표 · 혼성 환산 계수');
   s6.club.resetRubric('male');
   ok('기본값 되돌리기', s6.club.rubric('male').shoot[4] === '결정력 팀 1위');
 
-  // 혼성 환산 계수
-  const man = s6.members.add({ name: '홍길동', gender: '남', abil: { speed: 4, stamina: 4, basic: 4, shoot: 4, defense: 4, physical: 4 } });
-  const woman = s6.members.add({ name: '김하나', gender: '여', abil: { speed: 4, stamina: 4, basic: 4, shoot: 4, defense: 4, physical: 4 } });
-  ok('계수 1.0 = 그대로', S.weightedSkill(s6.members.byId(woman.id), 1) === 4);
-  ok('계수 0.8 = 여성만 환산', S.weightedSkill(s6.members.byId(woman.id), 0.8) === 3.2
-    && S.weightedSkill(s6.members.byId(man.id), 0.8) === 4);
-  s6.club.setMixedFactor(0.8);
-  ok('계수 저장/반올림', s6.club.mixedFactor() === 0.8);
-  s6.club.setMixedFactor(0.2);
-  ok('계수 하한 0.5', s6.club.mixedFactor() === 0.5);
-  s6.club.setMixedFactor(1);
-
-  // 팀당 기본 인원
+  // 한 팀 기본 인원 (라인업 기준)
   ok('기본 인원 11', s6.club.squadSize() === 11);
   s6.club.setSquadSize(7); ok('기본 인원 변경', s6.club.squadSize() === 7);
   s6.club.setSquadSize(8); ok('허용값만 (8 → 11로 복귀)', s6.club.squadSize() === 11);
@@ -397,14 +237,14 @@ console.log('\n[v0.6.0] 측정 기록 → 자동 환산');
 
   // JSON 왕복
   s7.members.setTest(w.id, 'run1500', 440);
-  s7.club.setMixedFactor(0.8); s7.club.setSquadSize(7);
+  s7.club.setSquadSize(7);
   s7.club.setRubricText('female', 'shoot', 5, '우리 팀 해결사');
   const s8 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
   await s8.init();
   await s8.importJSON(s7.exportJSON());
   ok('JSON 왕복 — 기록', s8.members.all()[0].tests.run1500.sec === 440);
   ok('JSON 왕복 — 기준표', s8.club.rubric('female').shoot[4] === '우리 팀 해결사');
-  ok('JSON 왕복 — 계수·기본 인원', s8.club.mixedFactor() === 0.8 && s8.club.squadSize() === 7);
+  ok('JSON 왕복 — 기본 인원', s8.club.squadSize() === 7);
   ok('옛 백업(기준표 없음)도 기본값으로 채움', await (async () => {
     const s9 = S.createStore({ load: async () => null, save: async () => true, clear: async () => {} });
     await s9.init();

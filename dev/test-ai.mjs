@@ -43,7 +43,7 @@ ok('앱 데이터와 다른 localStorage 키 사용', mem.has('woosulsan-fc:ai')
 
 const store = createStore();
 await store.init();
-store.members.bulkAdd(['김민준', '이서준', '박도윤'], { team: 'A' });
+store.members.bulkAdd(['김민준', '이서준', '박도윤']);
 const g = store.matches.add({ date: '2026-09-24', place: '시민운동장' });
 store.members.active().forEach((m) => store.matches.setAttendance(g.id, m.id, 'in'));
 const exported = store.exportJSON();
@@ -124,12 +124,10 @@ mockFetch(() => jsonResponse(401, { error: { message: 'invalid x-api-key' } }));
 
 {
   const ctx = AI.buildClubContext(store, { matchId: g.id });
-  ok('컨텍스트에 회원·경기 요약', ctx.회원.length === 3 && ctx.경기.참석자수 === 3);
+  ok('컨텍스트에 회원·경기 요약', ctx.회원.length === 3 && ctx.경기.참석자.length === 3, JSON.stringify(ctx.경기));
   ok('컨텍스트에 키 없음', !JSON.stringify(ctx).includes('sk-ant'));
-  const p = AI.teamCoachPrompt({ store, matchId: g.id, candidates: [], groupCount: 2 });
-  ok('팀 코치 프롬프트: 허구 금지 지시', p.system.includes('지어내지 마세요'));
-  ok('팀 코치 프롬프트: JSON 스키마 명시', p.system.includes('"teams"') && p.system.includes('"cautions"'));
-  const t = AI.tacticsPrompt({ players: [{ name: 'a', skill: 3, pos: 'MF', gk: false }], teamLabel: 'A팀', formations: ['2-2-1'], note: '' });
+  ok('v1.0: 내부 팀 나누기 프롬프트는 없다', typeof AI.teamCoachPrompt !== 'function');
+  const t = AI.tacticsPrompt({ players: [{ name: 'a', skill: 3, pos: 'MF', gk: false }], teamLabel: '우리팀', formations: ['2-2-1'], note: '' });
   ok('전술 프롬프트: 0~1 좌표 지시', t.system.includes('0~1'));
   const n = AI.noticePrompt({ store, matchId: g.id, mode: 'notice', tone: '유쾌하게' });
   ok('공지문 프롬프트: 톤 반영', n.system.includes('유쾌'));
