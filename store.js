@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.0.0-beta';
+export const MODULE_VERSION = 'v1.0.0';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -214,6 +214,62 @@ const FORMATION_SLOT_MAP = {
 export function formationSlots(name) {
   return FORMATION_SLOT_MAP[name] || FORMATION_SLOT_MAP['4-3-3'];
 }
+
+/* ---------------- 전술보드 좌표 (S3, 2026-09-29) ----------------
+ * 좌표는 x·y 모두 0~100 의 %(퍼센트) — 화면의 .pitch-wrap 컨테이너 크기에 대한 비율이다
+ * (CSS `left:${x}%;top:${y}%` 로 그대로 쓴다). 필드 SVG 자체의 viewBox 는 "0 0 100 150"
+ * (가로 2 : 세로 3 비율)이지만, 컨테이너 높이가 그 비율을 그대로 따라가므로 %좌표가 곧
+ * 필드 위의 실제 위치와 일치한다 — 화살표를 그 SVG 안에 그릴 때만 y 를 ×1.5 해서
+ * viewBox 좌표로 바꾼다(app.js arrowsSVG).
+ * 가운데 선(하프라인)은 %y = 50 — 우리(side='us')는 아래쪽 절반(50~100, 골문이 100 방향),
+ * 상대(side='opp')는 위쪽 절반(0~50, 골문이 0 방향)에 자동 배치한다.
+ * formationSlots() 와 같은 순서(GK 먼저, 이후 포메이션 문자열의 줄 순서)로 좌표를 낸다.
+ */
+export function layoutFormation(formation, side = 'us') {
+  const rows = String(formation).split('-').map((n) => parseInt(n, 10)).filter((n) => Number.isFinite(n) && n > 0);
+  const need = formationSlots(formation).length;
+  const pts = [];
+  pts.push({ x: 50, y: side === 'us' ? 94 : 6 });   // GK
+  const from = side === 'us' ? 82 : 18;    // 골문 쪽 줄(수비)
+  const to = side === 'us' ? 54 : 46;      // 하프라인 쪽 줄(공격) — 50(하프라인)을 넘지 않는다
+  const useRows = rows.length ? rows : [need - 1];
+  useRows.forEach((k, i) => {
+    const y = useRows.length > 1 ? from + (i * (to - from)) / (useRows.length - 1) : (from + to) / 2;
+    for (let j = 0; j < k; j += 1) {
+      pts.push({ x: Math.round(((j + 1) * 100) / (k + 1)), y: Math.round(y) });
+    }
+  });
+  // 알 수 없는 포메이션 등 자리 수가 안 맞으면 대기줄로 채우거나 잘라낸다 (자리 수 = formationSlots 길이 고정)
+  while (pts.length < need) pts.push({ x: Math.round((pts.length * 100) / (need + 1)), y: side === 'us' ? 66 : 34 });
+  return pts.slice(0, need);
+}
+
+/** 경기 라인업(slots: memberId[])을 보드용 "우리 핀"(좌표+회원)으로. 라인업이 없으면 빈 자리만 */
+export function buildOurPins(formation, slots, findMember) {
+  const coords = layoutFormation(formation, 'us');
+  const labels = formationSlots(formation);
+  const list = Array.isArray(slots) ? slots : [];
+  return coords.map((c, i) => {
+    const mid = list[i] || null;
+    const mem = mid && typeof findMember === 'function' ? findMember(mid) : null;
+    return { x: c.x, y: c.y, memberId: mid, name: mem ? mem.name : '', gk: labels[i] === 'GK' };
+  });
+}
+
+/** 상대 포메이션 → 회색 점선 원 자동 배치(이름 없이 포지션 표식만) */
+export function buildOppPins(formation) {
+  const coords = layoutFormation(formation, 'opp');
+  const labels = formationSlots(formation);
+  return coords.map((c, i) => ({ x: c.x, y: c.y, pos: labels[i] || 'MF' }));
+}
+
+/** 세트피스 기본 배치 — 공 위치 + 힌트. "기본"이므로 전원 재배치는 하지 않는다(선수 배치는 감독이 손으로 조정) */
+export const SET_PIECE_TEMPLATES = {
+  'corner-left': { label: '코너킥 (좌)', ball: { x: 3, y: 5 }, hint: '좌측 코너 — 공격 진영' },
+  'corner-right': { label: '코너킥 (우)', ball: { x: 97, y: 5 }, hint: '우측 코너 — 공격 진영' },
+  freekick: { label: '프리킥', ball: { x: 50, y: 32 }, hint: '박스 앞 프리킥 기본 위치' },
+  kickoff: { label: '킥오프', ball: { x: 50, y: 50 }, hint: '센터서클 킥오프' },
+};
 
 /* ---------------- 포지션 토큰 ----------------
  * 사장님이 실제로 붙여넣는 형식: "교 한가람 95 여 포워드", "서보라 96 여 레프트 윙", "오태경 85 남 센터백"
@@ -851,10 +907,57 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       home: x.home !== false,                        // S2: 홈/원정 (기본 홈)
       opponentId: typeof x.opponentId === 'string' && x.opponentId ? x.opponentId : null,
       lineup: normalizeLineup(x.lineup),              // S2/S3
+      boardSnapshot: normalizeBoardSnapshot(x.boardSnapshot),   // S3: 전술보드 저장본
       result: normalizeResult(x.result),              // S2
       scorers: normalizeScorers(x.scorers),           // S2
       review: typeof x.review === 'string' ? x.review.slice(0, 1000) : '',   // S2
       createdAt: x.createdAt || new Date().toISOString(),
+    };
+  }
+
+  /* ---------- 전술보드 스냅샷 (S3) ----------
+   * 준비 모드에서 만든 배치를 경기에 첨부한다. 좌표는 x·y 모두 0~100 %(컨테이너 기준 CSS 퍼센트,
+   * layoutFormation 주석 참고)로 고정 클램프한다. 알 수 없는/누락된 값은 버리므로
+   * 옛 저장본이 깨져도 화면이 죽지 않는다.
+   */
+  function clampX(v) { const n = Number(v); return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0; }
+  function clampY(v) { const n = Number(v); return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0; }
+  function normalizeBoardPin(p, gkLabel) {
+    return {
+      x: clampX(p?.x), y: clampY(p?.y),
+      memberId: typeof p?.memberId === 'string' ? p.memberId : null,
+      name: typeof p?.name === 'string' ? p.name.slice(0, 40) : '',
+      gk: gkLabel != null ? gkLabel === 'GK' : !!p?.gk,
+    };
+  }
+  function normalizeOppPin(p, posLabel) {
+    return { x: clampX(p?.x), y: clampY(p?.y), pos: posLabel || (['GK', 'DF', 'MF', 'FW'].includes(p?.pos) ? p.pos : 'MF') };
+  }
+  function normalizeBoardArrows(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.slice(0, 80).map((a) => ({
+      x1: clampX(a?.x1), y1: clampY(a?.y1), x2: clampX(a?.x2), y2: clampY(a?.y2),
+      style: a?.style === 'dashed' ? 'dashed' : 'solid',
+    }));
+  }
+  function normalizeBoardSnapshot(bs) {
+    if (!bs || typeof bs !== 'object') return null;
+    const formation = typeof bs.formation === 'string' && bs.formation ? bs.formation : FORMATION_PRESETS[0];
+    const oppFormation = typeof bs.oppFormation === 'string' ? bs.oppFormation : '';
+    const ourLabels = formationSlots(formation);
+    const oppLabels = formationSlots(oppFormation || formation);
+    const ourRaw = Array.isArray(bs.ourPins) ? bs.ourPins : [];
+    const oppRaw = Array.isArray(bs.oppPins) ? bs.oppPins : [];
+    return {
+      formation,
+      oppFormation,
+      ourPins: ourLabels.map((lab, i) => normalizeBoardPin(ourRaw[i], lab)),
+      oppPins: oppLabels.map((lab, i) => normalizeOppPin(oppRaw[i], lab)),
+      arrows: normalizeBoardArrows(bs.arrows),
+      ball: bs.ball && Number.isFinite(Number(bs.ball.x)) && Number.isFinite(Number(bs.ball.y))
+        ? { x: clampX(bs.ball.x), y: clampY(bs.ball.y) } : null,
+      setPiece: typeof bs.setPiece === 'string' ? bs.setPiece : null,
+      updatedAt: bs.updatedAt || new Date().toISOString(),
     };
   }
 
@@ -1021,6 +1124,9 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           if (g.scorers?.length) {
             g.scorers = g.scorers.filter((s) => s.memberId !== id)
               .map((s) => (s.assistId === id ? { ...s, assistId: null } : s));
+          }
+          if (g.boardSnapshot?.ourPins?.length) {
+            g.boardSnapshot.ourPins = g.boardSnapshot.ourPins.map((p) => (p.memberId === id ? { ...p, memberId: null, name: '' } : p));
           }
         }
         state.tactics = state.tactics.map((t) => ({
@@ -1354,7 +1460,12 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           for (const [k, v] of Object.entries(g.attendance || {})) att[remap(k)] = v;
           const lineup = g.lineup ? { formation: g.lineup.formation, slots: g.lineup.slots.map((s) => (s ? remap(s) : null)) } : null;
           const scorers = (g.scorers || []).map((s) => ({ ...s, memberId: remap(s.memberId), assistId: s.assistId ? remap(s.assistId) : null }));
-          state.matches.push({ ...g, attendance: att, opponentId: remapOpp(g.opponentId), lineup, scorers });
+          // S3: 보드 스냅샷도 회원 id 를 새 기기 기준으로 다시 잇는다(안 하면 "공석"으로 보여 데이터가 있어도 사라진 것처럼 보인다)
+          const boardSnapshot = g.boardSnapshot ? {
+            ...g.boardSnapshot,
+            ourPins: g.boardSnapshot.ourPins.map((p) => (p.memberId ? { ...p, memberId: remap(p.memberId) } : p)),
+          } : null;
+          state.matches.push({ ...g, attendance: att, opponentId: remapOpp(g.opponentId), lineup, scorers, boardSnapshot });
         }
         const tids = new Set(state.tactics.map((t) => t.id));
         for (const t of next.tactics) {

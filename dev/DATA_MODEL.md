@@ -1,11 +1,13 @@
-# 축구&joy 데이터 모델 (schema 3, v1.0.0-beta)
+# 축구&joy 데이터 모델 (schema 3, v1.0.0)
 
 > **v1.0 전면 개편 (2026-09-29)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
 > 사장님 확정: **상대는 외부 클럽만**. 내부 팀 배정(A~F)·팀 묶음 제안·팀별 감독 평가는 이 앱에서 없앴다.
 > 하단 탭은 **우리팀 · 상대팀 · 전술보드 · 경기** 4개.
 > **S1**(v1.0.0-alpha, 2026-09-29 아침): 우리팀 탭만 완성, 나머지는 자리표시.
 > **S2**(v1.0.0-beta, 2026-09-29 오후): 상대팀 카드 + 경기 기록(라인업 목록 배치·결과·득점자/도움) + 전적 자동 계산. 전술보드는 여전히 자리표시(S3 준비 중).
+> **S3**(v1.0.0, 2026-09-29 저녁): 전술보드 **준비 모드** — 필드 SVG + 우리 라인업(파란 원)·상대 포메이션(회색 점선 원) 자동 배치·드래그(포인터)·화살표·세트피스 템플릿·PNG 내보내기·`match.boardSnapshot` 저장. 경기 모드(폰·큰 글씨·잠금)는 S4, 토글 자리만 있다.
 > 내려간 코드는 `dev/parked/`(balance.js · tactics-v0.x.js · team-tab-v0.7.js · test-teams-v0.7.mjs)에 있다.
+> `dev/parked/tactics-v0.x.js` 는 S3 에서 **필드 SVG 뼈대(펜티박스·센터서클 좌표)만** 참고했다 — 5팀 의존 코드(teamOptions·TEAM_KEYS 등)는 가져오지 않았다.
 
 > **앱 이름 vs 클럽 이름** (v0.5.7, 2026-09-22 사장님)
 > - `APP_NAME = '축구&joy'` (app.js) — 앱 자체의 이름. 제목표시줄·헤더·manifest·설정 하단·파일명·AI 프롬프트·`exportJSON().app`.
@@ -70,7 +72,8 @@
 | `attendance` | `{ [memberId]: "in"\|"out"\|"maybe" }` | S1 | 키가 없으면 미응답 |
 | `home` | boolean | **S2** | 홈/원정. 기본 `true`(홈) |
 | `opponentId` | string \| null | **S2** | 상대 클럽 카드 id. 상대 카드를 지우면 `null` 로 풀린다(경기 자체는 안 지워짐) |
-| `lineup` | `{ formation, slots: (memberId\|null)[] }` \| null | **S2/S3** | `formation` 은 `FORMATION_PRESETS` 중 하나(store.js). `slots` 길이·순서는 `formationSlots(formation)` 의 포지션 목록과 1:1 — S2 는 포지션별 목록 배치만, 좌표 배치는 S3 |
+| `lineup` | `{ formation, slots: (memberId\|null)[] }` \| null | **S2/S3** | `formation` 은 `FORMATION_PRESETS` 중 하나(store.js). `slots` 길이·순서는 `formationSlots(formation)` 의 포지션 목록과 1:1 — S2 는 포지션별 목록 배치(경기 상세의 "라인업" 편집), 전술보드(S3)는 이 값을 **읽어서** 초기 배치의 출발점으로만 쓴다(되쓰지 않는다) |
+| `boardSnapshot` | `BoardSnapshot` \| null | **S3** | 전술보드 준비 모드에서 "보드 저장"을 눌렀을 때만 생긴다. 저장 전까지는 `null` — 화면은 그때그때 `lineup`·상대 카드에서 기본 배치를 다시 계산해 보여준다(3-2 참고) |
 | `result` | `{ gf, ga }` \| null | **S2** | 득실(0 이상 정수). 상대 전적 계산의 근거 |
 | `scorers` | `[{ memberId, count, assistId }]` | **S2** | 득점자·개수·도움(선택). `assistId` 는 S2 에서 새로 추가된 칸(마스터플랜 "득점자·도움 선택") |
 | `review` | string | **S2** | 경기 총평 |
@@ -94,11 +97,39 @@
 카드를 지워도(`store.opponents.remove`) 경기 기록은 남고 `match.opponentId` 만 `null` 로 풀린다 — 데이터 손실 0 원칙.
 `store.opponents.matchesOf(id)` 로 카드 상세에서 경기 이력 목록을 보여준다(최신순).
 
-## 4. Tactic — 전술 (**S3 에서 새 엔진으로 재정의**)
+## 4. 전술보드 — BoardSnapshot (**S3, 2026-09-29 구현**)
 
-v0.x 전술판 스키마(`{id, matchId, team, teamLabel, formation, pins[], strokes[], note}`)는
-`dev/parked/tactics-v0.x.js` 와 함께 보류했다. 기존 데이터는 `state.tactics` 에 그대로 남겨 두고 건드리지 않는다.
-S3 의 새 보드는 **우리 라인업 + 상대 포메이션 겹치기**가 들어가므로 `opponentId`·`boardSnapshot` 을 포함해 다시 정의한다.
+v0.x 전술판 스키마(`{id, matchId, team, teamLabel, formation, pins[], strokes[], note}`, `state.tactics` 배열)는
+`dev/parked/tactics-v0.x.js` 와 함께 보류했다 — **`state.tactics` 는 그대로 남겨 두고 건드리지 않는다** (읽지도 쓰지도 않음, 데이터 손실 0).
+S3 의 새 보드는 v0.x 처럼 별도 목록(여러 장 저장)이 아니라, **경기 1건에 스냅샷 1개**를 붙이는 구조다(`match.boardSnapshot`, 위 3장).
+좌표계는 **x·y 모두 0~100 %**(`.pitch-wrap` 컨테이너 기준 CSS 퍼센트 — `left/top` 에 그대로 쓴다) — 가운데 선(하프라인) `y=50`,
+**우리는 아래 절반(50~100, 골문이 100 쪽)**, **상대는 위 절반(0~50, 골문이 0 쪽)**.
+필드 SVG 자체의 `viewBox="0 0 100 150"` 은 그림(잔디·라인) 좌표일 뿐이고, 화살표를 그 SVG 안에 그릴 때만 `y×1.5` 로 바꿔 넣는다(`app.js arrowsSVG`) — 저장되는 값은 항상 0~100 %.
+
+```jsonc
+// match.boardSnapshot (기본은 null — "보드 저장"을 눌러야 생긴다)
+{
+  "formation": "4-3-3",        // 우리 포메이션 — FORMATION_PRESETS 중 하나
+  "oppFormation": "4-4-2",     // 상대 포메이션 — FORMATION_PRESETS 중 하나(또는 자유 문구 → formationSlots 는 4-3-3 얼개로 대체)
+  "ourPins": [                 // 길이 = formationSlots(formation).length, 순서 동일(GK 먼저)
+    { "x": 50, "y": 94, "memberId": "m_xxx", "name": "한가람", "gk": true },
+    { "x": 20, "y": 82, "memberId": null, "name": "", "gk": false }   // memberId 없으면 "공석"
+  ],
+  "oppPins": [                 // 길이 = formationSlots(oppFormation).length. 이름 없이 포지션 표식만(회색 점선 원)
+    { "x": 50, "y": 6, "pos": "GK" }   // y 는 0~50(상대 절반) 안
+  ],
+  "arrows": [ { "x1": 20, "y1": 130, "x2": 50, "y2": 90, "style": "solid" } ],  // "solid" | "dashed"
+  "ball": { "x": 3, "y": 5 } | null,     // 세트피스 템플릿을 적용하면 채워진다
+  "setPiece": "corner-left" | null,      // 마지막으로 적용한 템플릿 키 (store.js SET_PIECE_TEMPLATES)
+  "updatedAt": "2026-09-29T07:20:00.000Z"
+}
+```
+
+- **자동 배치**: `store.js layoutFormation(formation, side)` 가 포메이션 문자열(`"4-2-3-1"` → 줄 `[4,2,3,1]`)로 좌표를 계산한다.
+  `buildOurPins(formation, slots, findMember)` / `buildOppPins(formation)` 이 이 좌표에 라인업·포지션 표식을 얹어 초기 배치를 만든다 — **경기를 고르거나 "다시 배치"를 누를 때마다 새로 계산**하고, `boardSnapshot` 은 사용자가 손으로 옮긴 뒤 "보드 저장"을 눌러야만 쓰인다.
+- **세트피스 템플릿**(`SET_PIECE_TEMPLATES`): 코너킥(좌/우)·프리킥·킥오프 — 공 위치만 기본값으로 잡아 준다("기본 배치"). 선수 11명 전원을 재배치하지는 않는다(감독이 직접 조정하는 몫으로 남겨 둠).
+- 정규화(`normalizeBoardSnapshot`)는 좌표를 0~100 으로 클램프하고, `ourPins`/`oppPins` 길이를 포메이션 슬롯 수에 맞춰 자르거나 빈 자리로 채운다 — 깨진 저장본이 들어와도 화면이 죽지 않는다.
+- 회원을 삭제하면 `ourPins` 에서 그 자리는 `memberId:null`(공석)로 풀릴 뿐, 좌표·나머지 배치는 그대로 남는다(`store.members.remove`).
 
 ## 4.5 AI 설정 — **앱 데이터와 분리 저장**
 
@@ -218,7 +249,7 @@ clubs/{clubId}                    name, adminUids[]
 |---|---|---|---|
 | 우리팀 | 명단·포지션·능력치·오늘 출석·"오늘 가능" 필터 | `members`, `matches.today()`, `stats.attendance` | `members.*`, `matches.setAttendance` |
 | 상대팀 | 클럽 카드 목록·상세(메모·경기 이력) | `opponents.all()`, `opponents.matchesOf()` | `opponents.add/update/remove/addNote` |
-| 전술보드 | 자리표시 (S3 준비 중) | — | — |
+| 전술보드 | 준비 모드 — 필드 SVG·라인업 후보·상대 메모 패널·드래그·화살표·세트피스·PNG (경기 모드는 S4 토글 자리만) | `matches.sorted()`, `matches.byId().boardSnapshot`, `opponents.all()`, `members.active()`, `availableToday()` | `matches.update(id, { boardSnapshot })` (저장을 눌러야 씀) |
 | 경기 | 목록·만들기·라인업·결과 입력 | `matches.sorted()`, `opponents.all()`, `members.active()` | `matches.add/update/remove` (저장할 때마다 상대 전적 자동 재계산) |
 
 - 버전 스탬프: `app.js APP_VERSION` = `store.js`/`env.js`/`drafts.js` 의 `MODULE_VERSION` = `sw.js VERSION`.

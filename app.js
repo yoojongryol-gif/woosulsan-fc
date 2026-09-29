@@ -21,13 +21,14 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   ABILITIES, abilAvg, GENDERS, parseMemberLine, splitNamePosition, analyzeMemberName,
   effectiveSkill, isUnrated, MODULE_VERSION: STORE_VERSION,
   RUBRIC_GENDERS, rubricKeyFor, TESTS, testForAbil, parseTestInput, formatTestValue,
-  localDateStr, FORMATION_PRESETS, formationSlots } = STORE_NS;
+  localDateStr, FORMATION_PRESETS, formationSlots,
+  layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 
-export const APP_VERSION = 'v1.0.0-beta';
+export const APP_VERSION = 'v1.0.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -907,28 +908,452 @@ function updateAttendCounts() {
   if (chipToday) chipToday.textContent = `오늘 가능 ${avail.length}`;
 }
 
-/* ================= 자리표시 탭 (S2~S4) ================= */
-function placeholder(view, { stage, title, lead, items, when }) {
-  const el = $(view);
-  if (!el) return;
-  el.innerHTML = `<div class="phcard">
-    <div class="ph-stage">${esc(stage)}</div>
-    <div class="ph-title">${esc(title)}</div>
-    <div class="ph-lead">${esc(lead)}</div>
-    <ul class="ph-list">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-    <div class="ph-when">${esc(when)}</div>
+/* ================= 전술보드 — 준비 모드 (S3, 2026-09-29) =================
+ * 마스터플랜 §3·§4(S3): 필드 SVG + 우리 라인업(파란 원) + 상대 포메이션(회색 점선 원) 겹치기.
+ * 드래그 이동 · 화살표 · 세트피스 템플릿 · 스냅샷 저장(match.boardSnapshot)까지 이 화면에서 처리한다.
+ * 경기 모드(S4)는 토글 자리만 — 누르면 "S4에서 만듭니다" 안내만 뜬다.
+ */
+const bd = {
+  matchId: '',        // '' = 임시 라인업 (경기 미선택)
+  opponentId: '',      // '' = 상대 미선택 (직접 포메이션만 고름)
+  formation: FORMATION_PRESETS[0],
+  oppFormation: FORMATION_PRESETS[0],
+  ourPins: [],          // [{x,y,memberId,name,gk}]
+  oppPins: [],           // [{x,y,pos}]
+  arrows: [],             // [{x1,y1,x2,y2,style}]
+  ball: null,
+  setPiece: null,
+  mode: 'move',            // 'move' | 'arrow'
+  arrowStyle: 'solid',
+  panelOpen: false,         // 폰(세로)에서 후보 패널 펼침 여부
+  pendingCand: null,         // 드래그 미지원 환경 대비 — 탭으로 고른 후보 선수 id
+  loadedFrom: null,           // 마지막으로 불러온 matchId+snapshot 여부(경기 바뀔 때만 다시 채움)
+  dirty: false,
+};
+
+function boardMatches() { return store.matches.sorted(); }
+
+/** 경기를 고르면 그 경기의 라인업/상대/저장된 스냅샷으로 보드를 채운다. 임시 라인업이면 오늘 가능 선수로 기본 배치 */
+function loadBoardFor(matchId) {
+  bd.matchId = matchId || '';
+  const g = matchId ? store.matches.byId(matchId) : null;
+  if (g?.boardSnapshot) {
+    const s = g.boardSnapshot;
+    bd.formation = s.formation; bd.oppFormation = s.oppFormation || s.formation;
+    bd.ourPins = s.ourPins.map((p) => ({ ...p }));
+    bd.oppPins = s.oppPins.map((p) => ({ ...p }));
+    bd.arrows = s.arrows.map((a) => ({ ...a }));
+    bd.ball = s.ball ? { ...s.ball } : null;
+    bd.setPiece = s.setPiece || null;
+    bd.opponentId = g.opponentId || '';
+  } else {
+    bd.formation = g?.lineup?.formation || FORMATION_PRESETS[0];
+    bd.opponentId = g?.opponentId || '';
+    const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
+    bd.oppFormation = opp?.formation && FORMATION_PRESETS.includes(opp.formation) ? opp.formation : FORMATION_PRESETS[0];
+    const slots = g?.lineup?.slots || [];
+    bd.ourPins = buildOurPins(bd.formation, slots, (id) => store.members.byId(id));
+    bd.oppPins = buildOppPins(bd.oppFormation);
+    bd.arrows = [];
+    bd.ball = null;
+    bd.setPiece = null;
+  }
+  bd.dirty = false;
+  bd.loadedFrom = matchId || '__temp__';
+}
+
+/** 임시 라인업 — 경기 없이 "오늘 가능 선수"(없으면 활동 회원)로 채운다 */
+function loadBoardTemp() {
+  bd.matchId = '';
+  const cands = availableToday().length ? availableToday() : store.members.active();
+  const need = formationSlots(bd.formation).length;
+  const slots = cands.slice(0, need).map((m) => m.id);
+  bd.ourPins = buildOurPins(bd.formation, slots, (id) => store.members.byId(id));
+  bd.oppPins = buildOppPins(bd.oppFormation);
+  bd.arrows = []; bd.ball = null; bd.setPiece = null; bd.dirty = false; bd.loadedFrom = '__temp__';
+}
+
+/** 포메이션을 바꿀 때 — 겹치는 자리의 선수 배정은 최대한 유지하고 좌표만 새로 깐다 */
+function reflowOurFormation(newFormation) {
+  const oldSlots = bd.ourPins.map((p) => p.memberId);
+  bd.formation = newFormation;
+  bd.ourPins = buildOurPins(newFormation, oldSlots, (id) => store.members.byId(id));
+}
+function reflowOppFormation(newFormation) {
+  bd.oppFormation = newFormation;
+  bd.oppPins = buildOppPins(newFormation);
+}
+
+/** "다시 배치" — 저장된 스냅샷이 있어도 무시하고, 지금 고른 포메이션 기준 기본 좌표로 되돌린다 */
+function resetBoardLayout() {
+  const g = bd.matchId ? store.matches.byId(bd.matchId) : null;
+  const slots = g?.lineup && g.lineup.formation === bd.formation ? g.lineup.slots : bd.ourPins.map((p) => p.memberId);
+  bd.ourPins = buildOurPins(bd.formation, slots, (id) => store.members.byId(id));
+  bd.oppPins = buildOppPins(bd.oppFormation);
+  bd.arrows = []; bd.ball = null; bd.setPiece = null; bd.dirty = true;
+}
+
+function candidateList() {
+  const today = availableToday();
+  return today.length ? today : store.members.active();
+}
+
+function pinDotHTML(label, opts = {}) {
+  return `<div class="dot${opts.gk ? ' gk' : ''}${opts.ghost ? ' ghost' : ''}">${esc(label)}</div>`;
+}
+
+function ourPinHTML(p, i) {
+  const label = p.gk ? 'GK' : String(i);
+  const name = p.name ? p.name.slice(0, 5) : (p.memberId ? '' : '공석');
+  return `<div class="pin us${p.memberId ? '' : ' empty'}" data-side="us" data-idx="${i}" style="left:${p.x}%;top:${p.y}%">
+    ${pinDotHTML(label, { gk: p.gk })}
+    <div class="lbl">${esc(name)}</div>
   </div>`;
+}
+function oppPinHTML(p, i) {
+  return `<div class="pin opp" data-side="opp" data-idx="${i}" style="left:${p.x}%;top:${p.y}%">
+    ${pinDotHTML(p.pos, { ghost: true })}
+  </div>`;
+}
+function ballHTML() {
+  if (!bd.ball) return '';
+  return `<div class="ball-marker" data-ball style="left:${bd.ball.x}%;top:${bd.ball.y}%">⚽</div>`;
+}
+function arrowsSVG() {
+  return bd.arrows.map((a) => {
+    const ang = Math.atan2((a.y2 - a.y1) * 1.5, a.x2 - a.x1);
+    const L = 3.4;
+    const p1x = a.x2 - L * Math.cos(ang - 0.44); const p1y = a.y2 * 1.5 - L * Math.sin(ang - 0.44);
+    const p2x = a.x2 - L * Math.cos(ang + 0.44); const p2y = a.y2 * 1.5 - L * Math.sin(ang + 0.44);
+    return `<line x1="${a.x1}" y1="${a.y1 * 1.5}" x2="${a.x2}" y2="${a.y2 * 1.5}" stroke="#ffd83d" stroke-width="1.1"
+        stroke-linecap="round" ${a.style === 'dashed' ? 'stroke-dasharray="3 2.4"' : ''}/>
+      <polygon points="${a.x2},${a.y2 * 1.5} ${p1x},${p1y} ${p2x},${p2y}" fill="#ffd83d"/>`;
+  }).join('');
+}
+function boardPitchSVG() {
+  return `<svg class="pitch" viewBox="0 0 100 150" aria-hidden="true">
+    <defs><linearGradient id="bgrass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a9b66"/><stop offset="1" stop-color="#2b7f52"/>
+    </linearGradient></defs>
+    <rect width="100" height="150" fill="url(#bgrass)"/>
+    <g fill="none" stroke="#fff" stroke-width=".7" opacity=".85">
+      <rect x="4" y="4" width="92" height="142"/>
+      <line x1="4" y1="75" x2="96" y2="75"/>
+      <circle cx="50" cy="75" r="14"/><circle cx="50" cy="75" r="1" fill="#fff"/>
+      <rect x="24" y="4" width="52" height="20"/><rect x="38" y="4" width="24" height="8"/>
+      <rect x="24" y="126" width="52" height="20"/><rect x="38" y="138" width="24" height="8"/>
+      <path d="M34 24a18 14 0 0 0 32 0"/><path d="M34 126a18 14 0 0 1 32 0"/>
+    </g>
+  </svg>`;
+}
+
+function boardCandPanelHTML() {
+  const cands = candidateList();
+  const placed = new Set(bd.ourPins.map((p) => p.memberId).filter(Boolean));
+  const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
+  return `
+    <div class="board-panel-sec">
+      <div class="section-title" style="margin-top:0">라인업 후보 <span class="count">${cands.length}</span></div>
+      <div class="cand-hint">선수를 눌러 고른 뒤 보드의 자리를 누르면 배치됩니다</div>
+      <div class="cand-list">${cands.length ? cands.map((m) => `
+        <button type="button" class="cand-chip${placed.has(m.id) ? ' placed' : ''}${bd.pendingCand === m.id ? ' picking' : ''}"
+          data-cand="${m.id}">${esc(m.name)}${placed.has(m.id) ? ' ✓' : ''}</button>`).join('')
+        : '<div class="empty" style="padding:16px"><div>오늘 가능 선수가 없습니다. 우리팀 탭에서 출석을 먼저 체크하세요.</div></div>'}</div>
+    </div>
+    <div class="board-panel-sec">
+      <div class="section-title">상대 메모</div>
+      ${opp ? `<div class="card flat" style="padding:12px">
+          <b>${esc(opp.name)}</b>${opp.formation ? ` <span class="chip">${esc(opp.formation)}</span>` : ''}
+          ${opp.keyPlayers ? `<div class="opp-line" style="margin-top:6px"><span class="k">핵심</span>${esc(opp.keyPlayers)}</div>` : ''}
+          ${opp.strengths ? `<div class="opp-line"><span class="k">강점</span>${esc(opp.strengths)}</div>` : ''}
+          ${opp.weaknesses ? `<div class="opp-line"><span class="k">약점</span>${esc(opp.weaknesses)}</div>` : ''}
+        </div>` : '<div class="dim">선택된 상대가 없습니다.</div>'}
+    </div>`;
 }
 
 function renderBoard() {
-  placeholder('#view-board', {
-    stage: 'S3 준비 중', title: '전술보드',
-    lead: '우리 라인업을 상대 포메이션 위에 겹쳐 놓고 지시하는 화면입니다.',
-    items: ['준비 모드 — 태블릿 가로, 후보 목록 + 상대 메모 같이 보기',
-      '경기 모드 — 폰 세로, 큰 글씨·한 손·잠금',
-      '드래그 · 화살표 · 세트피스 템플릿', '보드 저장해서 경기 기록에 붙이기'],
-    when: 'v1.0.0 (준비 모드) → v1.0.1 (경기 모드)',
+  const root = $('#view-board');
+  if (!root) return;
+  const matches = boardMatches();
+  // render() 는 다른 탭에 있을 때도 배경에서 모든 화면을 다시 그린다(app.js 공통 패턴) — 이때는
+  // 아직 회원·경기 데이터가 없을 수 있으므로, "경기 자동 선택"은 사용자가 실제로 전술보드 탭에
+  // 들어왔을 때(ui.tab === 'board')만 한 번 한다. 그래야 나중에 경기를 만들고 탭에 들어와도
+  // "임시 라인업"에 갇히지 않는다.
+  if (!bd.loadedFrom && ui.tab === 'board') {
+    if (matches.length) loadBoardFor((store.matches.upcoming()[0] || matches[0]).id);
+    else loadBoardTemp();
+  }
+  // 보드가 켜진 채로 다른 곳에서 선택된 경기가 지워졌으면 임시 라인업으로 조용히 내려온다
+  if (bd.matchId && !matches.some((m) => m.id === bd.matchId)) loadBoardTemp();
+
+  const opponents = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  root.innerHTML = `
+    <div class="row" style="margin:10px 0 8px;gap:8px">
+      <div class="seg-wide" id="bd-view-mode" style="flex:0 0 auto">
+        <button type="button" data-vm="prep" aria-pressed="true">준비 모드</button>
+        <button type="button" data-vm="live" aria-pressed="false">경기 모드</button>
+      </div>
+    </div>
+    <div class="board-layout">
+      <div class="board-main">
+        <div class="selectrow">
+          <select id="bd-match"><option value="" ${!bd.matchId ? 'selected' : ''}>임시 라인업 (경기 미선택)</option>
+            ${matches.map((m) => {
+    const o = m.opponentId ? store.opponents.byId(m.opponentId) : null;
+    return `<option value="${m.id}" ${bd.matchId === m.id ? 'selected' : ''}>${esc(fmtDate(m.date))} · ${o ? esc(o.name) : '상대 미정'}${m.boardSnapshot ? ' ★' : ''}</option>`;
+  }).join('')}</select>
+        </div>
+        <div class="row" style="margin:6px 0 10px">
+          <select id="bd-opponent" class="grow"><option value="">상대 직접 선택 안 함</option>
+            ${opponents.map((o) => `<option value="${o.id}" ${bd.opponentId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <select id="bd-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.formation === f ? 'selected' : ''}>우리 ${f}</option>`).join('')}</select>
+          <select id="bd-opp-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.oppFormation === f ? 'selected' : ''}>상대 ${f}</option>`).join('')}</select>
+        </div>
+        <div class="pitch-wrap" id="bd-pitch">
+          ${boardPitchSVG()}
+          <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
+          <div id="bd-pins" style="position:absolute;inset:0">
+            ${bd.oppPins.map(oppPinHTML).join('')}
+            ${bd.ourPins.map(ourPinHTML).join('')}
+            ${ballHTML()}
+          </div>
+        </div>
+        <div class="tool-row">
+          <button class="toolbtn" id="bd-m-move" aria-pressed="${bd.mode === 'move'}">이동</button>
+          <button class="toolbtn" id="bd-m-arrow" aria-pressed="${bd.mode === 'arrow'}">화살표</button>
+          ${bd.mode === 'arrow' ? `
+            <button class="toolbtn" data-astyle="solid" aria-pressed="${bd.arrowStyle === 'solid'}">실선</button>
+            <button class="toolbtn" data-astyle="dashed" aria-pressed="${bd.arrowStyle === 'dashed'}">점선</button>` : ''}
+          <span style="flex:1"></span>
+          <button class="toolbtn" id="bd-undo" ${bd.arrows.length ? '' : 'disabled style="opacity:.4"'}>되돌리기</button>
+          <button class="toolbtn" id="bd-clear" ${bd.arrows.length ? '' : 'disabled style="opacity:.4"'}>전체 지우기</button>
+        </div>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+          ${Object.entries(SET_PIECE_TEMPLATES).map(([k, sp]) => `<button class="toolbtn" data-setpiece="${k}">${esc(sp.label)}</button>`).join('')}
+          <button class="toolbtn" id="bd-ball-clear">공 지우기</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn grow" id="bd-reset">다시 배치</button>
+          <button class="btn grow primary" id="bd-save" ${bd.matchId ? '' : 'disabled style="opacity:.5"'}>보드 저장</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn block grow" id="bd-png">보드 이미지 저장(PNG)</button>
+        </div>
+        ${!bd.matchId ? '<div class="dim" style="margin-top:6px;font-size:12px">경기를 선택하면 이 배치를 경기 기록에 저장할 수 있습니다.</div>' : ''}
+        <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION}</div>
+      </div>
+      <button type="button" class="board-panel-toggle" id="bd-panel-toggle" aria-expanded="${bd.panelOpen}">라인업 후보 · 상대 메모 ${bd.panelOpen ? '접기 ▾' : '펼치기 ▸'}</button>
+      <div class="board-panel${bd.panelOpen ? ' open' : ''}" id="bd-panel">${boardCandPanelHTML()}</div>
+    </div>`;
+  bindBoardPointer();
+}
+
+/* ---------- 포인터: 핀/공 드래그 · 화살표 · 후보 드래그 투입 ---------- */
+function bindBoardPointer() {
+  const pitch = $('#bd-pitch');
+  if (!pitch) return;
+  const pct = (e) => {
+    const r = pitch.getBoundingClientRect();
+    return {
+      x: Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)),
+      y: Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)),
+    };
+  };
+  const redrawPins = () => {
+    const box = $('#bd-pins');
+    if (!box) return;
+    box.innerHTML = `${bd.oppPins.map(oppPinHTML).join('')}${bd.ourPins.map(ourPinHTML).join('')}${ballHTML()}`;
+  };
+  const redrawArrows = () => {
+    const svg = $('#bd-arrows');
+    if (svg) svg.innerHTML = arrowsSVG();
+    const u = $('#bd-undo'); const c = $('#bd-clear');
+    [u, c].forEach((b) => { if (b) { b.disabled = !bd.arrows.length; b.style.opacity = bd.arrows.length ? '' : '.4'; } });
+  };
+
+  $('#bd-pins')?.addEventListener('pointerdown', (e) => {
+    const ball = e.target.closest('[data-ball]');
+    const pin = e.target.closest('.pin');
+    if (!ball && !pin) return;
+    e.preventDefault();
+    const target = e.target.closest('.pin, .ball-marker');
+    target.setPointerCapture?.(e.pointerId);
+
+    if (bd.mode === 'arrow' && pin) {
+      const side = pin.dataset.side; const idx = Number(pin.dataset.idx);
+      const src = side === 'us' ? bd.ourPins[idx] : bd.oppPins[idx];
+      const stroke = { x1: src.x, y1: src.y, x2: src.x, y2: src.y, style: bd.arrowStyle };
+      const redrawArrowsLive = () => { const svg = $('#bd-arrows'); if (svg) svg.innerHTML = arrowsSVG() + arrowPreviewSVG(stroke); };
+      const move = (ev) => { const p = pct(ev); stroke.x2 = p.x; stroke.y2 = p.y; redrawArrowsLive(); };
+      const up = () => {
+        pitch.removeEventListener('pointermove', move); pitch.removeEventListener('pointerup', up); pitch.removeEventListener('pointercancel', cancel);
+        if (Math.hypot(stroke.x2 - stroke.x1, stroke.y2 - stroke.y1) > 1.5) { bd.arrows.push(stroke); bd.dirty = true; }
+        redrawArrows();
+      };
+      const cancel = () => { pitch.removeEventListener('pointermove', move); pitch.removeEventListener('pointerup', up); redrawArrows(); };
+      pitch.addEventListener('pointermove', move);
+      pitch.addEventListener('pointerup', up);
+      pitch.addEventListener('pointercancel', cancel);
+      return;
+    }
+
+    // 이동 모드 — 핀/공 드래그
+    target.classList.add('dragging');
+    const move = (ev) => {
+      const p = pct(ev);
+      if (ball) { bd.ball = { x: p.x, y: p.y }; }
+      else {
+        const side = pin.dataset.side; const idx = Number(pin.dataset.idx);
+        (side === 'us' ? bd.ourPins : bd.oppPins)[idx] = { ...(side === 'us' ? bd.ourPins : bd.oppPins)[idx], x: p.x, y: p.y };
+      }
+      target.style.left = p.x + '%'; target.style.top = p.y + '%';
+    };
+    const up = () => {
+      target.classList.remove('dragging');
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      target.removeEventListener('pointercancel', up);
+      bd.dirty = true;
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+    target.addEventListener('pointercancel', up);
   });
+
+  // 후보 선수 → 보드 자리로 드래그 투입 (포인터 기반, 터치 포함)
+  $('#bd-panel')?.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.cand-chip');
+    if (!chip) return;
+    e.preventDefault();
+    const memberId = chip.dataset.cand;
+    const ghost = document.createElement('div');
+    ghost.className = 'cand-ghost';
+    ghost.textContent = chip.textContent.replace(' ✓', '');
+    document.body.appendChild(ghost);
+    const moveGhost = (ev) => { ghost.style.left = ev.clientX + 'px'; ghost.style.top = ev.clientY + 'px'; };
+    moveGhost(e);
+    let overIdx = -1;
+    const move = (ev) => {
+      moveGhost(ev);
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const pin = el?.closest?.('.pin[data-side="us"]');
+      $$('.pin.us.drop-target').forEach((n) => n.classList.remove('drop-target'));
+      overIdx = pin ? Number(pin.dataset.idx) : -1;
+      if (pin) pin.classList.add('drop-target');
+    };
+    const up = (ev) => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      ghost.remove();
+      $$('.pin.us.drop-target').forEach((n) => n.classList.remove('drop-target'));
+      if (overIdx >= 0) assignCandidateToSlot(memberId, overIdx);
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
+}
+
+function arrowPreviewSVG(s) {
+  return `<line x1="${s.x1}" y1="${s.y1 * 1.5}" x2="${s.x2}" y2="${s.y2 * 1.5}" stroke="#ffd83d" stroke-width="1.1"
+    stroke-linecap="round" opacity=".8" ${s.style === 'dashed' ? 'stroke-dasharray="3 2.4"' : ''}/>`;
+}
+
+/** 후보 선수를 보드의 i번 자리에 넣는다. 이미 배치된 선수면 자리를 맞바꾼다(선수 자체가 사라지지 않게) */
+function assignCandidateToSlot(memberId, i) {
+  const mem = store.members.byId(memberId);
+  if (!mem || !bd.ourPins[i]) return;
+  const fromIdx = bd.ourPins.findIndex((p) => p.memberId === memberId);
+  const target = bd.ourPins[i];
+  if (fromIdx >= 0 && fromIdx !== i) {
+    const prevTarget = { ...target };
+    bd.ourPins[i] = { ...target, memberId: mem.id, name: mem.name };
+    bd.ourPins[fromIdx] = { ...bd.ourPins[fromIdx], memberId: prevTarget.memberId, name: prevTarget.name };
+  } else {
+    bd.ourPins[i] = { ...target, memberId: mem.id, name: mem.name };
+  }
+  bd.dirty = true;
+  renderBoard();
+  toast(`${mem.name} 배치`);
+}
+
+function boardSnapshotFromState() {
+  return {
+    formation: bd.formation, oppFormation: bd.oppFormation,
+    ourPins: bd.ourPins.map((p) => ({ ...p })), oppPins: bd.oppPins.map((p) => ({ ...p })),
+    arrows: bd.arrows.map((a) => ({ ...a })), ball: bd.ball ? { ...bd.ball } : null,
+    setPiece: bd.setPiece || null, updatedAt: new Date().toISOString(),
+  };
+}
+
+function saveBoardSnapshot() {
+  if (!bd.matchId) { toast('경기를 선택해야 저장할 수 있습니다', 'err'); return; }
+  store.matches.update(bd.matchId, { boardSnapshot: boardSnapshotFromState() });
+  bd.dirty = false;
+  toast('보드를 경기에 저장했습니다');
+  renderBoard();
+}
+
+async function exportBoardPNG() {
+  const W = 760; const PH = Math.round(W * 1.5); const HEAD = 84;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = PH + HEAD + 40;
+  const x = c.getContext('2d');
+  x.fillStyle = '#f7f4ee'; x.fillRect(0, 0, c.width, c.height);
+  const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
+  x.fillStyle = '#241f1a'; x.font = '900 26px -apple-system, Malgun Gothic, sans-serif';
+  x.fillText(`전술보드 · 우리(${bd.formation}) vs ${opp ? opp.name : '상대'}(${bd.oppFormation})`, 20, 38);
+  x.fillStyle = '#6b6255'; x.font = '700 16px -apple-system, Malgun Gothic, sans-serif';
+  x.fillText(`${store.club.name()} · ${APP_NAME} ${APP_VERSION}`, 20, 62);
+
+  const oy = HEAD;
+  const grad = x.createLinearGradient(0, oy, 0, oy + PH);
+  grad.addColorStop(0, '#3a9b66'); grad.addColorStop(1, '#2b7f52');
+  x.fillStyle = grad; x.fillRect(0, oy, W, PH);
+  const sx = (v) => (v / 100) * W; const sy = (v) => oy + (v / 150) * PH;
+  x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 2.2;
+  x.strokeRect(sx(4), sy(4), sx(92), sy(146) - sy(4));
+  x.beginPath(); x.moveTo(sx(4), sy(75)); x.lineTo(sx(96), sy(75)); x.stroke();
+  x.beginPath(); x.ellipse(sx(50), sy(75), sx(14), sy(89) - sy(75), 0, 0, Math.PI * 2); x.stroke();
+
+  for (const a of bd.arrows) {
+    x.strokeStyle = '#e0a800'; x.lineWidth = 4; x.lineCap = 'round';
+    if (a.style === 'dashed') x.setLineDash([10, 8]); else x.setLineDash([]);
+    x.beginPath(); x.moveTo(sx(a.x1), oy + (a.y1 / 100) * PH); x.lineTo(sx(a.x2), oy + (a.y2 / 100) * PH); x.stroke();
+    x.setLineDash([]);
+  }
+  x.fillStyle = '#2b7f52';
+  bd.oppPins.forEach((p) => {
+    const px = sx(p.x); const py = oy + (p.y / 100) * PH;
+    x.beginPath(); x.arc(px, py, 17, 0, Math.PI * 2);
+    x.strokeStyle = 'rgba(255,255,255,.9)'; x.lineWidth = 2.4; x.setLineDash([4, 3]); x.stroke(); x.setLineDash([]);
+    x.fillStyle = '#fff'; x.font = '800 12px sans-serif'; x.textAlign = 'center'; x.fillText(p.pos, px, py + 4);
+  });
+  bd.ourPins.forEach((p, i) => {
+    const px = sx(p.x); const py = oy + (p.y / 100) * PH;
+    x.beginPath(); x.arc(px, py, 19, 0, Math.PI * 2);
+    x.fillStyle = p.gk ? '#f2b705' : '#2f5fa8'; x.fill();
+    x.lineWidth = 3; x.strokeStyle = 'rgba(255,255,255,.9)'; x.stroke();
+    x.fillStyle = '#fff'; x.font = '900 15px sans-serif'; x.textAlign = 'center';
+    x.fillText(p.gk ? 'GK' : String(i), px, py + 5);
+    if (p.name) {
+      x.font = '800 15px -apple-system, Malgun Gothic, sans-serif';
+      const w = x.measureText(p.name).width;
+      x.fillStyle = 'rgba(0,0,0,.45)'; x.fillRect(px - w / 2 - 6, py + 22, w + 12, 21);
+      x.fillStyle = '#fff'; x.fillText(p.name, px, py + 37);
+    }
+    x.textAlign = 'left';
+  });
+  if (bd.ball) {
+    const bx = sx(bd.ball.x); const by = oy + (bd.ball.y / 100) * PH;
+    x.font = '20px sans-serif'; x.textAlign = 'center'; x.fillText('⚽', bx, by + 7); x.textAlign = 'left';
+  }
+  x.fillStyle = '#9a9183'; x.font = '600 14px -apple-system, Malgun Gothic, sans-serif';
+  x.fillText(`${APP_NAME} 앱 ${APP_VERSION}`, 20, c.height - 12);
+
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  await shareOrDownload(new File([blob], `축구joy_전술보드_${todayStr()}.png`, { type: 'image/png' }), blob);
 }
 
 /* ================= 상대팀 (S2) =================
@@ -2166,6 +2591,53 @@ function bindEvents() {
     const mo = t.closest('[data-match-open]');
     if (mo) return matchDetailModal(mo.dataset.matchOpen);
 
+    /* ----- 전술보드 (S3) ----- */
+    const vm = t.closest('#bd-view-mode [data-vm]');
+    if (vm) {
+      if (vm.dataset.vm === 'live') { toast('경기 모드는 S4에서 만듭니다'); return; }
+      return;
+    }
+    if (t.closest('#bd-m-move')) { bd.mode = 'move'; return renderBoard(); }
+    if (t.closest('#bd-m-arrow')) { bd.mode = 'arrow'; return renderBoard(); }
+    const astyle = t.closest('[data-astyle]');
+    if (astyle) { bd.arrowStyle = astyle.dataset.astyle; return renderBoard(); }
+    if (t.closest('#bd-undo')) { bd.arrows.pop(); bd.dirty = true; return renderBoard(); }
+    if (t.closest('#bd-clear')) {
+      if (!bd.arrows.length) return;
+      if (await confirmDialog({ title: '그린 화살표를 모두 지울까요?', ok: '지우기', danger: true })) { bd.arrows = []; bd.dirty = true; renderBoard(); }
+      return;
+    }
+    const sp = t.closest('[data-setpiece]');
+    if (sp) {
+      const tpl = SET_PIECE_TEMPLATES[sp.dataset.setpiece];
+      if (tpl) { bd.ball = { ...tpl.ball }; bd.setPiece = sp.dataset.setpiece; bd.dirty = true; toast(tpl.hint); renderBoard(); }
+      return;
+    }
+    if (t.closest('#bd-ball-clear')) { bd.ball = null; bd.setPiece = null; bd.dirty = true; return renderBoard(); }
+    if (t.closest('#bd-reset')) {
+      resetBoardLayout();
+      toast('포메이션 기본 배치로 되돌렸습니다');
+      return renderBoard();
+    }
+    if (t.closest('#bd-save')) return saveBoardSnapshot();
+    if (t.closest('#bd-png')) return exportBoardPNG();
+    if (t.closest('#bd-panel-toggle')) { bd.panelOpen = !bd.panelOpen; return renderBoard(); }
+    const cand = t.closest('.cand-chip');
+    if (cand) {
+      // 드래그가 안 되는 환경(마우스 클릭만) 대비 — 탭 두 번(선수 선택 → 자리 선택)으로도 배치할 수 있게
+      if (bd.pendingCand === cand.dataset.cand) { bd.pendingCand = null; return renderBoard(); }
+      bd.pendingCand = cand.dataset.cand;
+      toast('보드에서 넣을 자리를 눌러 주세요');
+      return renderBoard();
+    }
+    const slotPin = t.closest('#bd-pins .pin.us');
+    if (slotPin && bd.pendingCand) {
+      const picked = bd.pendingCand;
+      bd.pendingCand = null;   // 배치 렌더 전에 먼저 비워야 "고르는 중" 표시가 같이 지워진다
+      assignCandidateToSlot(picked, Number(slotPin.dataset.idx));
+      return;
+    }
+
     /* ----- v1.0 업데이트 안내 (자동 백업) ----- */
     if (t.closest('#btn-legacy-hide')) { ui.legacyHidden = true; return renderOurTeam(); }
     if (t.closest('#btn-legacy-download')) return exportLegacyJSON();
@@ -2210,6 +2682,16 @@ function bindEvents() {
 
   document.addEventListener('change', (e) => {
     if (e.target.id === 'file-import' && e.target.files[0]) { const fl = e.target.files[0]; e.target.value = ''; importJSONFile(fl); }
+    if (e.target.id === 'bd-match') { loadBoardFor(e.target.value); renderBoard(); }
+    if (e.target.id === 'bd-opponent') {
+      bd.opponentId = e.target.value;
+      const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
+      if (opp?.formation && FORMATION_PRESETS.includes(opp.formation)) reflowOppFormation(opp.formation);
+      bd.dirty = true;
+      renderBoard();
+    }
+    if (e.target.id === 'bd-formation') { reflowOurFormation(e.target.value); bd.dirty = true; renderBoard(); }
+    if (e.target.id === 'bd-opp-formation') { reflowOppFormation(e.target.value); bd.dirty = true; renderBoard(); }
   });
 
   document.addEventListener('input', (e) => {
