@@ -21,13 +21,13 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   ABILITIES, abilAvg, GENDERS, parseMemberLine, splitNamePosition, analyzeMemberName,
   effectiveSkill, isUnrated, MODULE_VERSION: STORE_VERSION,
   RUBRIC_GENDERS, rubricKeyFor, TESTS, testForAbil, parseTestInput, formatTestValue,
-  localDateStr } = STORE_NS;
+  localDateStr, FORMATION_PRESETS, formationSlots } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 
-export const APP_VERSION = 'v1.0.0-alpha';
+export const APP_VERSION = 'v1.0.0-beta';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -708,6 +708,12 @@ function todayHead() {
   const d = new Date();
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY_KO[d.getDay()]})`;
 }
+/** "YYYY-MM-DD" → "9월 29일(화)" (경기·상대 화면 공용) */
+function fmtDate(dstr) {
+  const d = new Date(`${dstr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dstr;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEKDAY_KO[d.getDay()]})`;
+}
 
 /** 오늘 자리 — 출석을 처음 누를 때만 만든다 (빈 자리를 미리 만들지 않는다) */
 function todaySession({ create = false } = {}) {
@@ -914,17 +920,9 @@ function placeholder(view, { stage, title, lead, items, when }) {
   </div>`;
 }
 
-function renderOpponent() {
-  placeholder('#view-opponent', {
-    stage: '다음 단계 · S2', title: '상대팀',
-    lead: '상대 클럽마다 카드 1장. 우리 내부 팀이 아니라 밖에서 만나는 팀만 들어옵니다.',
-    items: ['이름 · 포메이션', '핵심 선수 메모', '강점 / 약점 메모', '전적은 경기 기록에서 자동으로 쌓입니다'],
-    when: 'v1.0.0-beta 에서 열립니다',
-  });
-}
 function renderBoard() {
   placeholder('#view-board', {
-    stage: '다음 단계 · S3', title: '전술보드',
+    stage: 'S3 준비 중', title: '전술보드',
     lead: '우리 라인업을 상대 포메이션 위에 겹쳐 놓고 지시하는 화면입니다.',
     items: ['준비 모드 — 태블릿 가로, 후보 목록 + 상대 메모 같이 보기',
       '경기 모드 — 폰 세로, 큰 글씨·한 손·잠금',
@@ -932,13 +930,432 @@ function renderBoard() {
     when: 'v1.0.0 (준비 모드) → v1.0.1 (경기 모드)',
   });
 }
+
+/* ================= 상대팀 (S2) =================
+ * 상대 클럽 카드 목록. 전적(record)은 항상 경기 기록에서 계산된 값을 보여줄 뿐 이 화면에서 고치지 않는다.
+ */
+function opponentRow(o) {
+  const rec = store.opponents.recordLabel(o);
+  return `<button type="button" class="opp-card" data-opp-open="${o.id}">
+    <div class="opp-top"><b>${esc(o.name)}</b>${o.formation ? `<span class="chip">${esc(o.formation)}</span>` : ''}</div>
+    <div class="opp-rec">${esc(rec)}</div>
+    ${o.strengths ? `<div class="opp-line"><span class="k">강점</span>${esc(o.strengths)}</div>` : ''}
+    ${o.weaknesses ? `<div class="opp-line"><span class="k">약점</span>${esc(o.weaknesses)}</div>` : ''}
+  </button>`;
+}
+
+function renderOpponent() {
+  const root = $('#view-opponent');
+  const list = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  let html = `<div class="row" style="margin:12px 0 10px">
+    <button class="btn primary grow" id="btn-add-opponent">${ICON.plus} 상대팀 추가</button>
+  </div>`;
+  if (!list.length) {
+    html += `<div class="empty">${ICON.team}<div class="big">등록된 상대팀이 없습니다</div>
+      <div>경기 전에 상대 클럽 카드를 만들어 두면 경기 기록·전적이 여기 쌓입니다.</div></div>`;
+  } else {
+    html += `<div class="section-title">상대 클럽 <span class="count">${list.length}</span></div>`;
+    html += list.map(opponentRow).join('');
+  }
+  root.innerHTML = html;
+}
+
+function opponentModal(existing) {
+  const o0 = existing || { name: '', formation: '', keyPlayers: '', strengths: '', weaknesses: '' };
+  const isCustom = !!o0.formation && !FORMATION_PRESETS.includes(o0.formation);
+  openModal(`
+    <h3>${existing ? '상대팀 수정' : '상대팀 추가'}</h3>
+    <div class="field"><label>클럽 이름</label><input type="text" id="f-opp-name" value="${esc(o0.name)}" placeholder="예: 은빛FC" autocomplete="off"></div>
+    <div class="field"><label>포메이션 (선택)</label>
+      <div class="seg-wide wrap" id="f-opp-formation">
+        ${FORMATION_PRESETS.map((f) => `<button type="button" data-f="${f}" aria-pressed="${o0.formation === f}">${f}</button>`).join('')}
+        <button type="button" data-f="__custom" aria-pressed="${isCustom}">기타</button>
+      </div>
+      <input type="text" id="f-opp-formation-custom" placeholder="예: 3-4-3 변형" value="${isCustom ? esc(o0.formation) : ''}"
+        style="margin-top:8px${isCustom ? '' : ';display:none'}">
+    </div>
+    <div class="field"><label>핵심 선수 메모</label><textarea id="f-opp-key" rows="2" placeholder="예: 10번 왼발 킥이 위협적">${esc(o0.keyPlayers)}</textarea></div>
+    <div class="field"><label>강점 메모</label><textarea id="f-opp-str" rows="2">${esc(o0.strengths)}</textarea></div>
+    <div class="field"><label>약점 메모</label><textarea id="f-opp-weak" rows="2">${esc(o0.weaknesses)}</textarea></div>
+    <div class="foot">
+      ${existing ? '<button class="btn danger" data-act="del">삭제</button>' : ''}
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const fb = e.target.closest('#f-opp-formation [data-f]');
+      if (fb) {
+        const custom = $('#f-opp-formation-custom', m);
+        custom.style.display = fb.dataset.f === '__custom' ? '' : 'none';
+        if (fb.dataset.f === '__custom') custom.focus();
+        $$('#f-opp-formation [data-f]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === fb)));
+        return;
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: `${existing.name} 상대 카드를 삭제할까요?`, body: '이 상대와 치른 경기 기록은 그대로 남고, 경기의 상대 연결만 풀립니다.', ok: '삭제', danger: true })) {
+          store.opponents.remove(existing.id);
+          toast('삭제했습니다'); render();
+        }
+        return;
+      }
+      const name = $('#f-opp-name', m).value.trim();
+      if (!name) { toast('클럽 이름을 입력해 주세요', 'err'); return; }
+      const activeBtn = $('#f-opp-formation [aria-pressed="true"]', m);
+      const formation = activeBtn?.dataset.f === '__custom' ? $('#f-opp-formation-custom', m).value.trim() : (activeBtn?.dataset.f || '');
+      const data = { name, formation,
+        keyPlayers: $('#f-opp-key', m).value.trim(), strengths: $('#f-opp-str', m).value.trim(), weaknesses: $('#f-opp-weak', m).value.trim() };
+      if (existing) { store.opponents.update(existing.id, data); toast('수정했습니다'); }
+      else { store.opponents.add(data); toast(`${name} 추가`); }
+      closeModal(); render();
+      if (ui.tab !== 'opponent') switchTab('opponent');
+    });
+  });
+}
+
+function matchMiniRow(g) {
+  const score = g.result ? `${g.result.gf}:${g.result.ga}` : '결과 없음';
+  // data-oppmatch-open (data-match-open 아님) — 상대 상세 모달 안에서만 로컬로 받는다.
+  // 전역 document 클릭 핸들러도 data-match-open 을 듣기 때문에, 같은 이름이면
+  // 모달을 닫기 전에 두 핸들러가 한 클릭에 겹쳐 뜬다(모달이 이중으로 열림).
+  return `<button type="button" class="matchmini" data-oppmatch-open="${g.id}">
+    <span>${esc(fmtDate(g.date))}</span><span class="dim">${g.home === false ? '원정' : '홈'}</span><b>${esc(score)}</b>
+  </button>`;
+}
+
+function opponentDetailModal(id) {
+  const o = store.opponents.byId(id);
+  if (!o) return;
+  const matches = store.opponents.matchesOf(id);
+  openModal(`
+    <h3>${esc(o.name)}</h3>
+    <div class="detail-chips">${o.formation ? `<span class="chip">${esc(o.formation)}</span>` : ''}<span class="chip">${esc(store.opponents.recordLabel(o))}</span></div>
+    ${o.keyPlayers ? `<div class="opp-line"><span class="k">핵심 선수</span>${esc(o.keyPlayers)}</div>` : ''}
+    ${o.strengths ? `<div class="opp-line"><span class="k">강점</span>${esc(o.strengths)}</div>` : ''}
+    ${o.weaknesses ? `<div class="opp-line"><span class="k">약점</span>${esc(o.weaknesses)}</div>` : ''}
+    <div class="section-title" style="margin-top:14px">메모 <span class="count">${o.notes.length}</span></div>
+    <div class="notelist">${o.notes.length ? o.notes.slice().reverse().map((n) => `<div class="noterow"><span class="dim">${esc(fmtWhen(n.at))}</span>${esc(n.text)}</div>`).join('') : '<div class="dim">메모가 없습니다</div>'}</div>
+    <div class="row" style="margin-top:6px"><input type="text" id="f-opp-note" placeholder="짧은 메모 추가" style="flex:1" maxlength="300"><button class="btn sm primary" data-act="addnote">추가</button></div>
+    <div class="section-title" style="margin-top:14px">경기 이력 <span class="count">${matches.length}</span></div>
+    ${matches.length ? matches.map(matchMiniRow).join('') : '<div class="dim">아직 경기 기록이 없습니다</div>'}
+    <div class="foot">
+      <button class="btn danger" data-act="del">삭제</button>
+      <button class="btn ghost" data-act="edit">수정</button>
+      <button class="btn primary" data-act="close">닫기</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const mo = e.target.closest('[data-oppmatch-open]');
+      if (mo) { closeModal(); return afterModalClose(() => matchDetailModal(mo.dataset.oppmatchOpen)); }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'edit') { closeModal(); return afterModalClose(() => opponentModal(o)); }
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: `${o.name} 상대 카드를 삭제할까요?`, body: '경기 기록은 그대로 남고, 상대 연결만 풀립니다.', ok: '삭제', danger: true })) {
+          store.opponents.remove(o.id); toast('삭제했습니다'); render();
+        }
+        return;
+      }
+      if (act === 'addnote') {
+        const v = $('#f-opp-note', m).value.trim();
+        if (!v) { toast('메모를 입력해 주세요', 'err'); return; }
+        store.opponents.addNote(o.id, v);
+        closeModal(); afterModalClose(() => opponentDetailModal(o.id));
+      }
+    });
+  });
+}
+
+/* ================= 경기 (S2) =================
+ * 경기 만들기(기본 정보) → 라인업(포지션별 목록 배치) → 결과(득/실·득점자·도움·총평).
+ * 저장할 때마다 store 가 상대 카드 전적을 다시 계산한다 — 여기서는 화면만 그린다.
+ */
+function statusChip(s) { return `<span class="chip">${esc(s)}</span>`; }
+
+function matchRow(g) {
+  const o = g.opponentId ? store.opponents.byId(g.opponentId) : null;
+  return `<button type="button" class="match-card" data-match-open="${g.id}">
+    <div class="match-top"><b>${esc(fmtDate(g.date))}</b>${statusChip(g.status)}</div>
+    <div class="match-mid"><span class="opp">${o ? esc(o.name) : '상대 미정'}</span>
+      ${g.result ? `<b class="score">${g.result.gf} : ${g.result.ga}</b>` : ''}
+      <span class="ha">${g.home === false ? '원정' : '홈'}</span></div>
+    ${g.place ? `<div class="match-place">${esc(g.place)}</div>` : ''}
+  </button>`;
+}
+
 function renderMatch() {
-  const n = store.matches.all().length;
-  placeholder('#view-match', {
-    stage: '다음 단계 · S2', title: '경기',
-    lead: `상대 고르기 → 라인업 → 결과 기록까지 한 흐름으로 남깁니다. 지금까지 쌓인 기록 ${n}건은 그대로 있습니다.`,
-    items: ['상대 선택 · 라인업 확정', '결과 · 득점자 · 총평', '상대 카드 전적 자동 갱신', '보드 스냅샷 첨부'],
-    when: 'v1.0.0-beta 에서 열립니다',
+  const root = $('#view-match');
+  const list = store.matches.sorted();
+  let html = `<div class="row" style="margin:12px 0 10px">
+    <button class="btn primary grow" id="btn-add-match">${ICON.plus} 경기 만들기</button>
+  </div>`;
+  if (!list.length) {
+    html += `<div class="empty">${ICON.ball}<div class="big">경기 기록이 없습니다</div>
+      <div>상대를 고르고 라인업·결과까지 한 흐름으로 남길 수 있습니다.</div></div>`;
+  } else {
+    html += `<div class="section-title">경기 <span class="count">${list.length}</span></div>`;
+    html += list.map(matchRow).join('');
+  }
+  root.innerHTML = html;
+}
+
+function matchInfoModal(existing) {
+  const g0 = existing || { date: todayStr(), place: '', status: '예정', opponentId: null, home: true };
+  const opps = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  openModal(`
+    <h3>${existing ? '경기 정보 수정' : '경기 만들기'}</h3>
+    <div class="field"><label>날짜</label><input type="date" id="f-g-date" value="${esc(g0.date)}"></div>
+    <div class="field"><label>상대 클럽</label>
+      <select id="f-g-opp">
+        <option value="">상대 미정</option>
+        ${opps.map((o) => `<option value="${o.id}" ${g0.opponentId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+      </select>
+      ${!opps.length ? '<div class="hint">먼저 상대팀 탭에서 클럽 카드를 만들어 두면 여기서 고를 수 있습니다.</div>' : ''}
+    </div>
+    <div class="field"><label>홈 / 원정</label>
+      <div class="seg-wide" id="f-g-home">
+        <button type="button" data-h="1" aria-pressed="${g0.home !== false}">홈</button>
+        <button type="button" data-h="0" aria-pressed="${g0.home === false}">원정</button>
+      </div>
+    </div>
+    <div class="field"><label>장소 메모 (선택)</label><input type="text" id="f-g-place" value="${esc(g0.place)}" placeholder="예: 시민운동장"></div>
+    <div class="field"><label>상태</label>
+      <div class="seg-wide" id="f-g-status">
+        ${['예정', '확정', '종료'].map((s) => `<button type="button" data-s="${s}" aria-pressed="${g0.status === s}">${s}</button>`).join('')}
+      </div>
+    </div>
+    <div class="foot">
+      ${existing ? '<button class="btn danger" data-act="del">삭제</button>' : ''}
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const hb = e.target.closest('#f-g-home [data-h]');
+      if (hb) { $$('#f-g-home [data-h]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === hb))); return; }
+      const sb = e.target.closest('#f-g-status [data-s]');
+      if (sb) { $$('#f-g-status [data-s]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === sb))); return; }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: '이 경기 기록을 삭제할까요?', body: '라인업·결과가 함께 삭제되고, 상대 전적이 다시 계산됩니다.', ok: '삭제', danger: true })) {
+          store.matches.remove(existing.id); toast('삭제했습니다'); render();
+        }
+        return;
+      }
+      const date = $('#f-g-date', m).value || todayStr();
+      const opponentId = $('#f-g-opp', m).value || null;
+      const home = $('#f-g-home [aria-pressed="true"]', m)?.dataset.h !== '0';
+      const place = $('#f-g-place', m).value.trim();
+      const status = $('#f-g-status [aria-pressed="true"]', m)?.dataset.s || '예정';
+      if (existing) {
+        store.matches.update(existing.id, { date, opponentId, home, place, status });
+        toast('수정했습니다');
+        closeModal(); render();
+        afterModalClose(() => matchDetailModal(existing.id));
+      } else {
+        const created = store.matches.add({ date, opponentId, home, place, status });
+        toast('경기를 만들었습니다');
+        closeModal(); render();
+        afterModalClose(() => matchDetailModal(created.id));
+      }
+    });
+  });
+}
+
+function lineupSummaryHTML(lu) {
+  const slotsPos = formationSlots(lu.formation);
+  return `<div class="lineup-sum">${lu.slots.map((mid, i) => {
+    const mem = mid ? store.members.byId(mid) : null;
+    return `<div class="ls-row"><span class="pos">${esc(slotsPos[i] || '')}</span><span>${mem ? esc(mem.name) : '<span class="dim">공석</span>'}</span></div>`;
+  }).join('')}</div>`;
+}
+
+function resultSummaryHTML(g) {
+  const scorers = g.scorers || [];
+  return `<div class="result-sum">
+    <div class="rs-score"><b>${g.result.gf} : ${g.result.ga}</b></div>
+    ${scorers.length ? `<div class="rs-scorers">${scorers.map((s) => {
+    const m = store.members.byId(s.memberId); const a = s.assistId ? store.members.byId(s.assistId) : null;
+    return `<span class="chip">${esc(m ? m.name : '알 수 없음')}${s.count > 1 ? ` ×${s.count}` : ''}${a ? ` (도움 ${esc(a.name)})` : ''}</span>`;
+  }).join('')}</div>` : ''}
+    ${g.review ? `<div class="rs-review">${esc(g.review)}</div>` : ''}
+  </div>`;
+}
+
+function matchDetailModal(id) {
+  const g = store.matches.byId(id);
+  if (!g) return;
+  const o = g.opponentId ? store.opponents.byId(g.opponentId) : null;
+  const lu = g.lineup;
+  const luCount = lu?.slots ? lu.slots.filter(Boolean).length : 0;
+  openModal(`
+    <h3>${esc(fmtDate(g.date))} · ${o ? esc(o.name) : '상대 미정'}</h3>
+    <div class="detail-chips">${statusChip(g.status)}<span class="chip">${g.home === false ? '원정' : '홈'}</span>${g.place ? `<span class="chip">${esc(g.place)}</span>` : ''}</div>
+    <div class="section-title" style="margin-top:12px">라인업 <span class="count">${lu ? `${luCount}명 · ${esc(lu.formation || '')}` : '미정'}</span>
+      <button class="btn sm ghost right" data-act="lineup">${lu ? '수정' : '만들기'}</button></div>
+    ${lu && luCount ? lineupSummaryHTML(lu) : '<div class="dim">아직 라인업이 없습니다.</div>'}
+    <div class="section-title" style="margin-top:14px">결과 <span class="count">${g.result ? `${g.result.gf}:${g.result.ga}` : '미입력'}</span>
+      <button class="btn sm ghost right" data-act="result">${g.result ? '수정' : '입력'}</button></div>
+    ${g.result ? resultSummaryHTML(g) : '<div class="dim">아직 결과가 없습니다.</div>'}
+    <div class="foot">
+      <button class="btn danger" data-act="del">삭제</button>
+      <button class="btn ghost" data-act="edit">정보 수정</button>
+      <button class="btn primary" data-act="close">닫기</button>
+    </div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'close') return closeModal();
+      if (act === 'edit') { closeModal(); return afterModalClose(() => matchInfoModal(g)); }
+      if (act === 'lineup') { closeModal(); return afterModalClose(() => lineupModal(g.id)); }
+      if (act === 'result') { closeModal(); return afterModalClose(() => resultModal(g.id)); }
+      if (act === 'del') {
+        closeModal();
+        if (await confirmDialog({ title: '이 경기 기록을 삭제할까요?', body: '라인업·결과가 함께 삭제되고, 상대 전적이 다시 계산됩니다.', ok: '삭제', danger: true })) {
+          store.matches.remove(g.id); toast('삭제했습니다'); render();
+        }
+      }
+    });
+  });
+}
+
+function lineupModal(matchId) {
+  const g = store.matches.byId(matchId);
+  if (!g) return;
+  let formation = g.lineup?.formation || FORMATION_PRESETS[0];
+  let slots = formationSlots(formation).map((_, i) => g.lineup?.slots?.[i] || null);
+  let useAll = false;
+
+  const candidates = () => {
+    const today = availableToday();
+    return useAll || !today.length ? store.members.active() : today;
+  };
+  const draw = () => {
+    const cands = candidates();
+    const pos = formationSlots(formation);
+    return `
+    <h3>라인업</h3>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:8px">슬롯 배치는 자리표시입니다 — 정밀한 위치는 전술보드(S3)에서 다룹니다.</div>
+    <div class="field"><label>포메이션</label>
+      <div class="seg-wide wrap" id="f-lu-formation">
+        ${FORMATION_PRESETS.map((f) => `<button type="button" data-f="${f}" aria-pressed="${formation === f}">${f}</button>`).join('')}
+      </div>
+    </div>
+    <div class="row" style="margin:6px 0 10px">
+      <button type="button" class="btn sm grow ${useAll ? '' : 'primary'}" data-act="cand-today">오늘 가능(${availableToday().length})</button>
+      <button type="button" class="btn sm grow ${useAll ? 'primary' : ''}" data-act="cand-all">전체 활동 회원</button>
+    </div>
+    <div class="lineup-form">${slots.map((mid, i) => `
+      <div class="lu-row">
+        <span class="pos">${esc(pos[i])}</span>
+        <select data-slot="${i}">
+          <option value="">비움</option>
+          ${cands.map((mm) => `<option value="${mm.id}" ${mid === mm.id ? 'selected' : ''}>${esc(mm.name)}</option>`).join('')}
+        </select>
+      </div>`).join('')}</div>
+    <div class="foot">
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`;
+  };
+
+  openModal(draw(), (m) => {
+    const repaint = () => { m.innerHTML = draw(); };
+    m.addEventListener('change', (e) => {
+      const sel = e.target.closest('[data-slot]');
+      if (sel) slots[Number(sel.dataset.slot)] = sel.value || null;
+    });
+    m.addEventListener('click', (e) => {
+      const fb = e.target.closest('#f-lu-formation [data-f]');
+      if (fb) {
+        formation = fb.dataset.f;
+        const old = slots;
+        slots = formationSlots(formation).map((_, i) => old[i] || null);
+        repaint();
+        return;
+      }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cand-today') { useAll = false; repaint(); return; }
+      if (act === 'cand-all') { useAll = true; repaint(); return; }
+      if (act === 'cancel') return closeModal();
+      if (act === 'save') {
+        const used = slots.filter(Boolean);
+        if (new Set(used).size !== used.length) { toast('같은 선수를 두 자리에 넣었습니다', 'err'); return; }
+        store.matches.update(g.id, { lineup: { formation, slots } });
+        toast('라인업을 저장했습니다');
+        closeModal(); render();
+        afterModalClose(() => matchDetailModal(g.id));
+      }
+    });
+  });
+}
+
+function scorerRowsHTML(scorers, memberOptions, assistOptions) {
+  return scorers.map((s, i) => `
+    <div class="scorer-row">
+      <select data-sc-mem="${i}">${memberOptions(s.memberId)}</select>
+      <input type="number" min="1" data-sc-cnt="${i}" value="${s.count || 1}" aria-label="득점 수">
+      <select data-sc-ast="${i}">${assistOptions(s.assistId)}</select>
+      <button type="button" class="btn sm danger" data-sc-del="${i}" aria-label="이 줄 삭제">×</button>
+    </div>`).join('');
+}
+
+function resultModal(matchId) {
+  const g = store.matches.byId(matchId);
+  if (!g) return;
+  let scorers = (g.scorers || []).map((s) => ({ ...s }));
+  const members = store.members.active();
+  const memberOptions = (sel) => '<option value="">선수 선택</option>'
+    + members.map((mm) => `<option value="${mm.id}" ${sel === mm.id ? 'selected' : ''}>${esc(mm.name)}</option>`).join('');
+  const assistOptions = (sel) => '<option value="">도움 없음</option>'
+    + members.map((mm) => `<option value="${mm.id}" ${sel === mm.id ? 'selected' : ''}>${esc(mm.name)}</option>`).join('');
+
+  openModal(`
+    <h3>결과 입력</h3>
+    <div class="row">
+      <div class="field" style="flex:1"><label>득점</label><input type="number" min="0" id="f-r-gf" value="${g.result?.gf ?? ''}" inputmode="numeric"></div>
+      <div class="field" style="flex:1"><label>실점</label><input type="number" min="0" id="f-r-ga" value="${g.result?.ga ?? ''}" inputmode="numeric"></div>
+    </div>
+    <div class="section-title">득점자 <button type="button" class="btn sm ghost right" data-act="add-scorer">+ 추가</button></div>
+    <div id="scorer-rows">${scorerRowsHTML(scorers, memberOptions, assistOptions)}</div>
+    <div class="field" style="margin-top:10px"><label>총평 (선택)</label><textarea id="f-r-review" rows="3" placeholder="오늘 경기 총평">${esc(g.review || '')}</textarea></div>
+    <div class="foot">
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    const repaint = () => { $('#scorer-rows', m).innerHTML = scorerRowsHTML(scorers, memberOptions, assistOptions); };
+    m.addEventListener('change', (e) => {
+      const mem = e.target.closest('[data-sc-mem]');
+      if (mem) { scorers[Number(mem.dataset.scMem)].memberId = mem.value || null; return; }
+      const cnt = e.target.closest('[data-sc-cnt]');
+      if (cnt) { scorers[Number(cnt.dataset.scCnt)].count = Math.max(1, Math.round(Number(cnt.value)) || 1); return; }
+      const ast = e.target.closest('[data-sc-ast]');
+      if (ast) { scorers[Number(ast.dataset.scAst)].assistId = ast.value || null; }
+    });
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="add-scorer"]')) { scorers.push({ memberId: null, count: 1, assistId: null }); repaint(); return; }
+      const del = e.target.closest('[data-sc-del]');
+      if (del) { scorers.splice(Number(del.dataset.scDel), 1); repaint(); return; }
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'save') {
+        const gf = Number($('#f-r-gf', m).value); const ga = Number($('#f-r-ga', m).value);
+        if (!Number.isFinite(gf) || !Number.isFinite(ga) || gf < 0 || ga < 0) { toast('득점·실점을 확인해 주세요', 'err'); return; }
+        const cleanScorers = scorers.filter((s) => s.memberId);
+        store.matches.update(g.id, { result: { gf, ga }, scorers: cleanScorers, review: $('#f-r-review', m).value.trim() });
+        toast('결과를 저장했습니다');
+        closeModal(); render();
+        afterModalClose(() => matchDetailModal(g.id));
+      }
+    });
   });
 }
 
@@ -1738,6 +2155,16 @@ function bindEvents() {
     if (mf) { ui.memberFilter = mf.dataset.mf; return renderOurTeam(); }
     const me = t.closest('[data-member-edit]');
     if (me) return memberModal(store.members.byId(me.dataset.memberEdit));
+
+    /* ----- 상대팀 (S2) ----- */
+    if (t.closest('#btn-add-opponent')) return opponentModal(null);
+    const oo = t.closest('[data-opp-open]');
+    if (oo) return opponentDetailModal(oo.dataset.oppOpen);
+
+    /* ----- 경기 (S2) ----- */
+    if (t.closest('#btn-add-match')) return matchInfoModal(null);
+    const mo = t.closest('[data-match-open]');
+    if (mo) return matchDetailModal(mo.dataset.matchOpen);
 
     /* ----- v1.0 업데이트 안내 (자동 백업) ----- */
     if (t.closest('#btn-legacy-hide')) { ui.legacyHidden = true; return renderOurTeam(); }

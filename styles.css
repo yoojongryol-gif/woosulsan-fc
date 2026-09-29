@@ -858,3 +858,59 @@ a.btn { text-decoration: none; }
 .phcard .ph-when { font-size: 12px; font-weight: 800; color: var(--text-3); }
 
 #settings-anchor { height: 1px; margin-top: 18px; }
+
+/* ================= 상대팀 · 경기 (S2, 2026-09-29) ================= */
+.dim { color: var(--text-3); font-size: 12px; font-weight: 600; }
+
+.opp-card, .match-card {
+  display: block; width: 100%; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 13px 14px; margin-bottom: 9px; box-shadow: var(--shadow);
+}
+.opp-card:active, .match-card:active { transform: scale(.985); }
+.opp-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.opp-top b { font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
+.opp-rec { font-size: 12.5px; font-weight: 700; color: var(--accent-ink); margin-bottom: 6px; }
+.opp-line { font-size: 12.5px; color: var(--text-2); line-height: 1.6; }
+.opp-line .k { display: inline-block; min-width: 40px; font-weight: 800; color: var(--text-3); margin-right: 4px; }
+.detail-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+
+.notelist { max-height: 160px; overflow-y: auto; margin-bottom: 4px; }
+.noterow { font-size: 12.5px; padding: 7px 0; border-top: 1px solid var(--line); display: flex; gap: 8px; }
+.noterow:first-child { border-top: 0; }
+.noterow .dim { flex: none; }
+
+.matchmini {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 4px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 700;
+}
+.matchmini:first-of-type { border-top: 0; }
+.matchmini b { margin-left: auto; }
+
+.match-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.match-top b { font-size: 14.5px; font-weight: 800; }
+.match-mid { display: flex; align-items: center; gap: 8px; }
+.match-mid .opp { font-size: 13.5px; font-weight: 700; color: var(--text-2); }
+.match-mid .score { margin-left: auto; font-size: 16px; font-weight: 900; letter-spacing: -.02em; }
+.match-mid .ha { font-size: 11.5px; font-weight: 800; color: var(--text-3); background: var(--surface-2); border-radius: 8px; padding: 2px 7px; }
+.match-place { font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+
+.lineup-sum { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 4px; }
+.ls-row { display: flex; gap: 10px; padding: 7px 10px; font-size: 13px; border-top: 1px solid var(--line); }
+.ls-row:first-child { border-top: 0; }
+.ls-row .pos { flex: 0 0 34px; font-weight: 800; color: var(--accent-ink); }
+
+.result-sum { margin-top: 4px; }
+.result-sum .rs-score { font-size: 22px; font-weight: 900; letter-spacing: -.03em; margin-bottom: 6px; }
+.rs-scorers { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.rs-review { font-size: 13px; color: var(--text-2); line-height: 1.6; background: var(--surface-2); border-radius: 12px; padding: 9px 11px; }
+
+.lineup-form { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
+.lu-row { display: flex; align-items: center; gap: 10px; }
+.lu-row .pos { flex: 0 0 34px; font-size: 12px; font-weight: 800; color: var(--accent-ink); text-align: center; }
+.lu-row select { flex: 1; }
+
+.scorer-row { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.scorer-row select:first-child { flex: 1.3; }
+.scorer-row select:last-of-type { flex: 1.3; }
+.scorer-row input[type="number"] { width: 52px; text-align: center; }

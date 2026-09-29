@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.0.0-alpha';
+export const MODULE_VERSION = 'v1.0.0-beta';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -197,6 +197,24 @@ export function clampSquadSize(v) {
   return SQUAD_SIZES.includes(n) ? n : DEFAULT_SQUAD_SIZE;
 }
 
+/* ---------------- 포메이션 (S2, 2026-09-29) ----------------
+ * 상대팀 카드의 포메이션 선택(사장님 확정 5개 + 기타 직접입력)과
+ * 경기 라인업의 "포지션별 목록 배치" 슬롯 구성에 공용으로 쓴다.
+ * 정밀한 좌표 배치는 S3 전술보드에서 다룬다 — S2 는 목록만 만든다.
+ */
+export const FORMATION_PRESETS = ['4-4-2', '4-3-3', '3-5-2', '4-2-3-1', '5-3-2'];
+const FORMATION_SLOT_MAP = {
+  '4-4-2': ['GK', 'DF', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'MF', 'FW', 'FW'],
+  '4-3-3': ['GK', 'DF', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'FW', 'FW', 'FW'],
+  '3-5-2': ['GK', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'MF', 'MF', 'FW', 'FW'],
+  '4-2-3-1': ['GK', 'DF', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'MF', 'MF', 'FW'],
+  '5-3-2': ['GK', 'DF', 'DF', 'DF', 'DF', 'DF', 'MF', 'MF', 'MF', 'FW', 'FW'],
+};
+/** 이름을 모르는/기타 포메이션이면 4-3-3 얼개로 자리만 채운다 */
+export function formationSlots(name) {
+  return FORMATION_SLOT_MAP[name] || FORMATION_SLOT_MAP['4-3-3'];
+}
+
 /* ---------------- 포지션 토큰 ----------------
  * 사장님이 실제로 붙여넣는 형식: "교 한가람 95 여 포워드", "서보라 96 여 레프트 윙", "오태경 85 남 센터백"
  *  - 한 단어(포워드·미들·백·골키퍼)와 두 단어(레프트 윙·라이트 백·센터 백) 모두 인식
@@ -365,6 +383,42 @@ export function effectiveSkill(member) {
 }
 /** 자동 평균이 아니라 예전 수동 값을 쓰는 중인가 */
 export function isUnrated(member) { return abilAvg(member?.abil) == null; }
+
+/* ---------------- 상대팀 카드 (S2, 2026-09-29) ----------------
+ * opponent.record 는 손으로 넣지 않는다 — 경기 기록(match.result)에서 항상 다시 계산한다.
+ */
+export function normalizeOpponentNote(n) {
+  const text = String(n?.text ?? '').trim().slice(0, 300);
+  if (!text) return null;
+  return { at: typeof n?.at === 'string' ? n.at : new Date().toISOString(), text };
+}
+export function normalizeOpponent(o) {
+  return {
+    id: o?.id || uid('o'),
+    name: String(o?.name ?? '').trim().slice(0, 30),
+    formation: typeof o?.formation === 'string' ? o.formation.trim().slice(0, 20) : '',
+    keyPlayers: typeof o?.keyPlayers === 'string' ? o.keyPlayers.trim().slice(0, 500) : '',
+    strengths: typeof o?.strengths === 'string' ? o.strengths.trim().slice(0, 500) : '',
+    weaknesses: typeof o?.weaknesses === 'string' ? o.weaknesses.trim().slice(0, 500) : '',
+    notes: Array.isArray(o?.notes) ? o.notes.map(normalizeOpponentNote).filter(Boolean) : [],
+    // record 는 항상 계산값으로 덮인다(아래 computeRecordFor) — 여기서는 자리만 채운다
+    record: { w: 0, d: 0, l: 0, gf: 0, ga: 0 },
+    createdAt: o?.createdAt || new Date().toISOString(),
+    updatedAt: o?.updatedAt || new Date().toISOString(),
+  };
+}
+/** 경기 목록에서 한 상대의 전적을 다시 센다 — 직접 입력 금지 원칙 */
+export function computeRecordFor(matches, opponentId) {
+  const rec = { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
+  for (const g of matches || []) {
+    if (g.opponentId !== opponentId || !g.result) continue;
+    const gf = Number(g.result.gf); const ga = Number(g.result.ga);
+    if (!Number.isFinite(gf) || !Number.isFinite(ga)) continue;
+    rec.gf += gf; rec.ga += ga;
+    if (gf > ga) rec.w += 1; else if (gf < ga) rec.l += 1; else rec.d += 1;
+  }
+  return rec;
+}
 
 export function emptyState() {
   return {
@@ -710,11 +764,18 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       tests: normalizeTestThresholds(raw?.club?.tests),
       squadSize: clampSquadSize(raw?.club?.squadSize ?? DEFAULT_SQUAD_SIZE),
     };
-    s.opponents = Array.isArray(raw?.opponents) ? raw.opponents : [];   // S2 전까지는 그대로 들고만 있는다
     s.members = Array.isArray(s.members) ? s.members.map(normalizeMember) : [];
     s.matches = Array.isArray(s.matches) ? s.matches.map(normalizeMatch) : [];
+    // S2: 상대 클럽 카드 — 전적은 항상 위 matches 에서 다시 계산한다(직접 입력값은 버린다)
+    s.opponents = Array.isArray(raw?.opponents) ? raw.opponents.map(normalizeOpponent) : [];
+    for (const o of s.opponents) o.record = computeRecordFor(s.matches, o.id);
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
     return s;
+  }
+
+  /** 상대 전적을 경기 기록 기준으로 전부 다시 계산 (경기 추가·수정·삭제 뒤 호출) */
+  function syncOpponentRecords() {
+    for (const o of state.opponents) o.record = computeRecordFor(state.matches, o.id);
   }
 
   /** 기록이 있고 잠겨 있으면 그 항목 점수를 기록에서 다시 만든다 */
@@ -750,6 +811,34 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     };
   }
 
+  /** 라인업 — { formation, slots: (memberId|null)[] }. 슬롯 수는 포메이션 얼개를 따른다 */
+  function normalizeLineup(lu) {
+    if (!lu || typeof lu !== 'object') return null;
+    const formation = typeof lu.formation === 'string' && lu.formation ? lu.formation : FORMATION_PRESETS[0];
+    const need = formationSlots(formation).length;
+    const raw = Array.isArray(lu.slots) ? lu.slots : [];
+    const slots = Array.from({ length: need }, (_, i) => (typeof raw[i] === 'string' ? raw[i] : null));
+    return { formation, slots };
+  }
+  /** 결과 — 득/실은 음수 없는 정수로 고정. 숫자로 못 읽으면 결과 없음으로 취급 */
+  function normalizeResult(r) {
+    if (!r || typeof r !== 'object') return null;
+    const gf = Number(r.gf); const ga = Number(r.ga);
+    if (!Number.isFinite(gf) || !Number.isFinite(ga)) return null;
+    return { gf: Math.max(0, Math.round(gf)), ga: Math.max(0, Math.round(ga)) };
+  }
+  /** 득점자 — { memberId, count, assistId } (S2: 득점자·도움 선택). count 1 미만은 1로 */
+  function normalizeScorers(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((s) => ({
+        memberId: typeof s?.memberId === 'string' ? s.memberId : null,
+        count: Math.max(1, Math.round(Number(s?.count)) || 1),
+        assistId: typeof s?.assistId === 'string' ? s.assistId : null,
+      }))
+      .filter((s) => s.memberId);
+  }
+
   function normalizeMatch(x) {
     return {
       id: x.id || uid('g'),
@@ -759,12 +848,12 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       status: ['예정', '확정', '종료'].includes(x.status) ? x.status : '예정',
       attendance: x.attendance && typeof x.attendance === 'object' ? x.attendance : {},
       // v1.0: 내부 팀 나누기(팀 묶음 제안 상태·팀 수·팀 명단)는 사라졌다.
-      // 아래 4칸은 S2(상대팀·경기 기록)에서 채운다 — 지금은 있으면 그대로 들고만 있는다.
-      opponentId: typeof x.opponentId === 'string' ? x.opponentId : null,
-      lineup: x.lineup && typeof x.lineup === 'object' ? x.lineup : null,
-      result: x.result && typeof x.result === 'object' ? x.result : null,
-      scorers: Array.isArray(x.scorers) ? x.scorers : [],
-      review: typeof x.review === 'string' ? x.review : '',
+      home: x.home !== false,                        // S2: 홈/원정 (기본 홈)
+      opponentId: typeof x.opponentId === 'string' && x.opponentId ? x.opponentId : null,
+      lineup: normalizeLineup(x.lineup),              // S2/S3
+      result: normalizeResult(x.result),              // S2
+      scorers: normalizeScorers(x.scorers),           // S2
+      review: typeof x.review === 'string' ? x.review.slice(0, 1000) : '',   // S2
       createdAt: x.createdAt || new Date().toISOString(),
     };
   }
@@ -929,6 +1018,10 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         for (const g of state.matches) {
           delete g.attendance[id];
           if (g.lineup?.slots) g.lineup.slots = g.lineup.slots.map((x) => (x === id ? null : x));
+          if (g.scorers?.length) {
+            g.scorers = g.scorers.filter((s) => s.memberId !== id)
+              .map((s) => (s.assistId === id ? { ...s, assistId: null } : s));
+          }
         }
         state.tactics = state.tactics.map((t) => ({
           ...t,
@@ -954,6 +1047,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       add(data) {
         const g = normalizeMatch(data);
         state.matches.push(g);
+        syncOpponentRecords();
         touch();
         return g;
       },
@@ -961,12 +1055,14 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         const i = state.matches.findIndex((g) => g.id === id);
         if (i < 0) return null;
         state.matches[i] = normalizeMatch(Object.assign({}, state.matches[i], patch, { id }));
+        syncOpponentRecords();
         touch();
         return state.matches[i];
       },
       remove(id) {
         state.matches = state.matches.filter((g) => g.id !== id);
         state.tactics = state.tactics.filter((t) => t.matchId !== id);
+        syncOpponentRecords();
         touch();
       },
       setAttendance(matchId, memberId, status) {
@@ -995,6 +1091,52 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         const found = state.matches.find((g) => g.date === d);
         if (found || !create) return found || null;
         return api.matches.add({ date: d, time: '20:00', place: '', status: '예정' });
+      },
+    },
+
+    /* 상대팀 카드 (S2) */
+    opponents: {
+      all() { return state.opponents; },
+      byId(id) { return state.opponents.find((o) => o.id === id) || null; },
+      add(data) {
+        const o = normalizeOpponent(data);
+        o.record = computeRecordFor(state.matches, o.id);
+        state.opponents.push(o);
+        touch();
+        return o;
+      },
+      update(id, patch) {
+        const i = state.opponents.findIndex((o) => o.id === id);
+        if (i < 0) return null;
+        const merged = normalizeOpponent(Object.assign({}, state.opponents[i], patch, { id, updatedAt: new Date().toISOString() }));
+        merged.record = computeRecordFor(state.matches, id);   // record 는 계산값 — patch 로 덮어쓸 수 없다
+        state.opponents[i] = merged;
+        touch();
+        return state.opponents[i];
+      },
+      addNote(id, text) {
+        const o = api.opponents.byId(id);
+        const note = normalizeOpponentNote({ text });
+        if (!o || !note) return null;
+        o.notes = [...o.notes, note];
+        touch();
+        return o;
+      },
+      /** 카드를 지워도 경기 기록은 남긴다 — opponentId 연결만 해제(데이터 손실 0 원칙) */
+      remove(id) {
+        state.opponents = state.opponents.filter((o) => o.id !== id);
+        for (const g of state.matches) if (g.opponentId === id) g.opponentId = null;
+        touch();
+      },
+      /** 이 상대와 치른 경기 (최신순) */
+      matchesOf(id) {
+        return state.matches.filter((g) => g.opponentId === id)
+          .sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+      },
+      recordLabel(o) {
+        const r = o?.record || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
+        const diff = r.gf - r.ga;
+        return `${r.w}승 ${r.d}무 ${r.l}패 · 득실 ${diff > 0 ? '+' : ''}${diff}`;
       },
     },
 
@@ -1136,7 +1278,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       const byName = new Map(state.members.map((m) => [m.name.trim(), m]));
       let fresh = 0; let existing = 0;
       for (const m of next.members) (byName.has(m.name.trim()) ? existing += 1 : fresh += 1);
-      return { total: next.members.length, fresh, existing, matches: next.matches.length, fixed, current: state.members.length };
+      return { total: next.members.length, fresh, existing, matches: next.matches.length, opponents: next.opponents.length, fixed, current: state.members.length };
     },
     /**
      * 백업 가져오기 (v0.6.3)
@@ -1178,22 +1320,52 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           }
         }
         const remap = (id) => idMap.get(id) || id;
+
+        // S2: 상대 클럽 카드 — 이름이 같으면 이어붙이고(빈 칸만 채움 + 메모는 중복 없이 합침), 처음 보는 것만 추가
+        const oppByName = new Map(state.opponents.map((o) => [o.name.trim(), o]));
+        const oppUsedIds = new Set(state.opponents.map((o) => o.id));
+        const oppIdMap = new Map();
+        for (const inc of next.opponents) {
+          const cur = oppByName.get(inc.name.trim());
+          if (cur) {
+            oppIdMap.set(inc.id, cur.id);
+            if (!cur.formation && inc.formation) cur.formation = inc.formation;
+            if (!cur.keyPlayers && inc.keyPlayers) cur.keyPlayers = inc.keyPlayers;
+            if (!cur.strengths && inc.strengths) cur.strengths = inc.strengths;
+            if (!cur.weaknesses && inc.weaknesses) cur.weaknesses = inc.weaknesses;
+            // 메모는 글 내용으로 중복을 본다 — 다른 기기에서 같은 순간에 적어도 시각(at)은 갈릴 수 있어서다
+            const haveNotes = new Set(cur.notes.map((n) => n.text));
+            for (const n of inc.notes) if (!haveNotes.has(n.text)) cur.notes.push(n);
+          } else {
+            const o = { ...inc };
+            if (oppUsedIds.has(o.id)) o.id = uid('o');
+            oppUsedIds.add(o.id);
+            oppIdMap.set(inc.id, o.id);
+            state.opponents.push(o);
+            oppByName.set(o.name.trim(), o);
+          }
+        }
+        const remapOpp = (id) => (id ? (oppIdMap.get(id) || id) : null);
+
         const ids = new Set(state.matches.map((g) => g.id));
         for (const g of next.matches) {
           if (ids.has(g.id)) continue;
           const att = {};
           for (const [k, v] of Object.entries(g.attendance || {})) att[remap(k)] = v;
-          state.matches.push({ ...g, attendance: att });
+          const lineup = g.lineup ? { formation: g.lineup.formation, slots: g.lineup.slots.map((s) => (s ? remap(s) : null)) } : null;
+          const scorers = (g.scorers || []).map((s) => ({ ...s, memberId: remap(s.memberId), assistId: s.assistId ? remap(s.assistId) : null }));
+          state.matches.push({ ...g, attendance: att, opponentId: remapOpp(g.opponentId), lineup, scorers });
         }
         const tids = new Set(state.tactics.map((t) => t.id));
         for (const t of next.tactics) {
           if (tids.has(t.id)) continue;
           state.tactics.push({ ...t, pins: (t.pins || []).map((pin) => ({ ...pin, memberId: remap(pin.memberId) })) });
         }
+        syncOpponentRecords();   // 새로 들어온/이어붙은 경기 기록으로 전적을 다시 센다
       }
       await adapter.save(state);
       emit();
-      return { members: state.members.length, matches: state.matches.length, ...stat };
+      return { members: state.members.length, matches: state.matches.length, opponents: state.opponents.length, ...stat };
     },
 
     /**

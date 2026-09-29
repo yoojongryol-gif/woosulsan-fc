@@ -1,8 +1,10 @@
-# 축구&joy 데이터 모델 (schema 3, v1.0.0-alpha)
+# 축구&joy 데이터 모델 (schema 3, v1.0.0-beta)
 
-> **v1.0 전면 개편 (2026-09-29, S1)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
+> **v1.0 전면 개편 (2026-09-29)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
 > 사장님 확정: **상대는 외부 클럽만**. 내부 팀 배정(A~F)·팀 묶음 제안·팀별 감독 평가는 이 앱에서 없앴다.
-> 하단 탭은 **우리팀 · 상대팀 · 전술보드 · 경기** 4개. S1 은 우리팀 탭만 완성, 나머지는 자리표시.
+> 하단 탭은 **우리팀 · 상대팀 · 전술보드 · 경기** 4개.
+> **S1**(v1.0.0-alpha, 2026-09-29 아침): 우리팀 탭만 완성, 나머지는 자리표시.
+> **S2**(v1.0.0-beta, 2026-09-29 오후): 상대팀 카드 + 경기 기록(라인업 목록 배치·결과·득점자/도움) + 전적 자동 계산. 전술보드는 여전히 자리표시(S3 준비 중).
 > 내려간 코드는 `dev/parked/`(balance.js · tactics-v0.x.js · team-tab-v0.7.js · test-teams-v0.7.mjs)에 있다.
 
 > **앱 이름 vs 클럽 이름** (v0.5.7, 2026-09-22 사장님)
@@ -66,28 +68,31 @@
 | `date` / `time` / `place` | string | S1 | `2026-09-29` / `20:00` / 장소 |
 | `status` | `예정`\|`확정`\|`종료` | S1 | |
 | `attendance` | `{ [memberId]: "in"\|"out"\|"maybe" }` | S1 | 키가 없으면 미응답 |
-| `opponentId` | string \| null | **S2** | 상대 클럽 카드 id |
-| `lineup` | `{ formation, slots: (memberId\|null)[] }` \| null | **S2/S3** | 확정 라인업. `slots` 순서 = 포메이션 슬롯 순서 |
-| `result` | `{ gf, ga }` \| null | **S2** | 득실 |
-| `scorers` | `[{ memberId, count }]` | **S2** | 득점자 |
+| `home` | boolean | **S2** | 홈/원정. 기본 `true`(홈) |
+| `opponentId` | string \| null | **S2** | 상대 클럽 카드 id. 상대 카드를 지우면 `null` 로 풀린다(경기 자체는 안 지워짐) |
+| `lineup` | `{ formation, slots: (memberId\|null)[] }` \| null | **S2/S3** | `formation` 은 `FORMATION_PRESETS` 중 하나(store.js). `slots` 길이·순서는 `formationSlots(formation)` 의 포지션 목록과 1:1 — S2 는 포지션별 목록 배치만, 좌표 배치는 S3 |
+| `result` | `{ gf, ga }` \| null | **S2** | 득실(0 이상 정수). 상대 전적 계산의 근거 |
+| `scorers` | `[{ memberId, count, assistId }]` | **S2** | 득점자·개수·도움(선택). `assistId` 는 S2 에서 새로 추가된 칸(마스터플랜 "득점자·도움 선택") |
 | `review` | string | **S2** | 경기 총평 |
 | `createdAt` | ISO string | S1 | |
 
 **v1.0 에서 사라진 필드**: `teamCount` · `teams` · `teamPlan`(내부 팀 묶음 제안 상태).
-S1 은 `opponentId`/`lineup`/`result`/`scorers`/`review` 를 **정규화만 하고 화면에 쓰지 않는다**(S2 착수 전까지 자리만).
 
-## 3-1. Opponent — 상대 클럽 카드 (**S2 정의, 미구현**)
+## 3-1. Opponent — 상대 클럽 카드 (**S2, 2026-09-29 구현**)
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `id` | string | `o_xxx` |
 | `name` | string | 상대 클럽 이름 |
-| `formation` | string | `4-3-3` 등. 전술보드에서 회색 점선 원 배치의 근거 |
+| `formation` | string | `FORMATION_PRESETS`(`4-4-2`·`4-3-3`·`3-5-2`·`4-2-3-1`·`5-3-2`) 중 하나 또는 "기타" 직접 입력 문구. 전술보드(S3)에서 상대 배치의 근거 |
 | `keyPlayers` | string | 핵심 선수 메모 (자유 텍스트 — 사장님 확정: 상대 정보는 메모 수준) |
 | `strengths` / `weaknesses` | string | 강점 / 약점 메모 |
-| `notes` | `[{ at, text }]` | 경기 때마다 덧붙이는 짧은 메모 |
-| `record` | `{ w, d, l, gf, ga }` | 전적 — **경기 기록에서 자동 누적**(직접 입력 금지) |
+| `notes` | `[{ at, text }]` | 경기 때마다 덧붙이는 짧은 메모. 카드 상세에서 계속 쌓인다 |
+| `record` | `{ w, d, l, gf, ga }` | 전적 — **`store.js computeRecordFor()` 가 경기 기록(`match.opponentId`+`match.result`)에서 매번 다시 센다. `opponents.update()` 에 넘겨도 무시된다** (직접 입력 금지 원칙을 코드로 강제) |
 | `createdAt` / `updatedAt` | ISO string | |
+
+카드를 지워도(`store.opponents.remove`) 경기 기록은 남고 `match.opponentId` 만 `null` 로 풀린다 — 데이터 손실 0 원칙.
+`store.opponents.matchesOf(id)` 로 카드 상세에서 경기 이력 목록을 보여준다(최신순).
 
 ## 4. Tactic — 전술 (**S3 에서 새 엔진으로 재정의**)
 
@@ -212,9 +217,9 @@ clubs/{clubId}                    name, adminUids[]
 | 탭 | 화면 | 읽는 것 | 쓰는 것 |
 |---|---|---|---|
 | 우리팀 | 명단·포지션·능력치·오늘 출석·"오늘 가능" 필터 | `members`, `matches.today()`, `stats.attendance` | `members.*`, `matches.setAttendance` |
-| 상대팀 | 자리표시 (S2) | — | — |
-| 전술보드 | 자리표시 (S3/S4) | — | — |
-| 경기 | 자리표시 (S2) — 쌓인 기록 건수만 표시 | `matches.all()` | — |
+| 상대팀 | 클럽 카드 목록·상세(메모·경기 이력) | `opponents.all()`, `opponents.matchesOf()` | `opponents.add/update/remove/addNote` |
+| 전술보드 | 자리표시 (S3 준비 중) | — | — |
+| 경기 | 목록·만들기·라인업·결과 입력 | `matches.sorted()`, `opponents.all()`, `members.active()` | `matches.add/update/remove` (저장할 때마다 상대 전적 자동 재계산) |
 
 - 버전 스탬프: `app.js APP_VERSION` = `store.js`/`env.js`/`drafts.js` 의 `MODULE_VERSION` = `sw.js VERSION`.
   네 값이 어긋나면 부팅 때 `checkModuleVersions()` 가 캐시를 비우고 다시 받는다. 화면 표식은 상단 우측(`#topbar-sub`).

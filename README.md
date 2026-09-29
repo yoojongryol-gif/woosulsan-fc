@@ -39,6 +39,7 @@
 ```
 node dev/test-migrate.mjs   # v0.7 → v1.0 마이그레이션 (데이터 손실 0)
 node dev/test-core.mjs      # 스토어·출석·나이·능력치·측정 환산
+node dev/test-opponent.mjs  # S2: 상대팀 카드·경기 기록·전적 자동 계산·백업 왕복
 node dev/test-position.mjs  # 이름/포지션 파서
 node dev/test-roster.mjs    # 카톡 명단 파서·회원 매칭
 node dev/test-import.mjs    # 백업 가져오기(합치기 기본)·명단 텍스트
