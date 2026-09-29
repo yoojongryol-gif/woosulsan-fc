@@ -1,4 +1,4 @@
-# 축구&joy 데이터 모델 (schema 3, v1.1.0)
+# 축구&joy 데이터 모델 (schema 3, v1.1.1)
 
 > **v1.0 전면 개편 (2026-09-29)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
 > 사장님 확정: **상대는 외부 클럽만**. 내부 팀 배정(A~F)·팀 묶음 제안·팀별 감독 평가는 이 앱에서 없앴다.
@@ -10,6 +10,13 @@
 > **S5**(v1.1.0, 2026-09-29 심야): 훈련 탭 신설(팀 훈련 + 개인 훈련) — 드릴 라이브러리(초기 15개, 삭제 없이 숨김만) ·
 > 팀 훈련 세션(`trainingSession`: 드릴 담기·참가자는 오늘 출석 연동·메모) · 개인 훈련 과제(`personalPlan`: 주 단위,
 > 간단 체크 약점 2항목 + 측정 기록 기반 **규칙 기반 추천**(AI 아님)·완료 체크·감독 확인·재측정 전후 비교). 12장 참고.
+> **S6**(v1.1.1, 2026-09-29 심야): 사장님 피드백 "기본 전술은 내가 넣어야 되는 구조야? 개인 훈련도?" →
+> 둘 다 **미리 들어 있고 고르고 고치는 구조**로 바꿨다. ① 전술 플레이북(`BUILTIN_PLAYBOOKS`, 코드 상수 15개 =
+> 포메이션 변형 10 + 세트피스 완성형 5) — 전술보드 탭 "기본 전술 불러오기"에서 골라 보드에 적용 → 손으로 고치기 →
+> "내 전술로 저장"하면 `state.playbooks`(사용자 플레이북)에 새 id 로 쌓인다. 12장 참고.
+> ② 개인 드릴 21개 추가(`DEFAULT_SOLO_DRILLS`, `drill.scope='solo'`) — 약점 태그(`weakTag`, 간단 체크 6항목+GK)로
+> 개인 과제 추천(`recommendTasksFor`)이 팀 드릴보다 먼저 찾는다. 기존 팀 드릴 15개는 `scope='team'`. 11-1장 갱신.
+> ③ 회원 삭제 "되돌리기" 토스트(5초, `toastUndo`) — 기존 데이터 정리 규칙(라인업 공석·득점자 정리·과제는 "탈퇴 선수" 보존)은 그대로.
 > 내려간 코드는 `dev/parked/`(balance.js · tactics-v0.x.js · team-tab-v0.7.js · test-teams-v0.7.mjs)에 있다.
 > `dev/parked/tactics-v0.x.js` 는 S3 에서 **필드 SVG 뼈대(펜티박스·센터서클 좌표)만** 참고했다 — 5팀 의존 코드(teamOptions·TEAM_KEYS 등)는 가져오지 않았다.
 
@@ -37,9 +44,10 @@
   "matches":   [ /* Match */ ],
   "opponents": [ /* Opponent — S2 에서 채운다. v1.0 은 빈 배열로 자리만 */ ],
   "tactics":   [ /* Tactic — S3 에서 새 보드 엔진으로 다시 정의 */ ],
-  "drills":    [ /* Drill — S5. 앱을 처음 열 때 15개가 자동으로 시딩된다(12장) */ ],
+  "drills":    [ /* Drill — S5/S6. 앱을 처음 열 때 팀15+개인21=36개가 자동으로 시딩된다(12장) */ ],
   "trainingSessions": [ /* TrainingSession — S5 */ ],
   "personalPlans":    [ /* PersonalPlan — S5 */ ],
+  "playbooks": [ /* Playbook(사용자 저장분만) — S6. 내장 15개는 BUILTIN_PLAYBOOKS(코드 상수)로 따로 있다(12장) */ ],
   "updatedAt": "2026-09-29T06:00:00.000Z"
 }
 ```
@@ -289,18 +297,30 @@ clubs/{clubId}                    name, adminUids[]
 
 ## 11. 훈련 — 드릴 · 팀 훈련 세션 · 개인 훈련 과제 (S5, 2026-09-29 구현)
 
-### 11-1. Drill — 드릴 라이브러리
+### 11-1. Drill — 드릴 라이브러리 (S5 팀 15개 + **S6 개인 21개**, 2026-09-29 심야 확장)
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `id` | string | `dr_xxx`. 기본 15개는 id 가 고정(`dr_pass_01` 등)이라 여러 기기에서 올려도 중복 시딩되지 않는다 |
-| `category` | `pass`\|`press`\|`transition`\|`setpiece`\|`fitness`\|`gk` | `DRILL_CATEGORIES`(패스·압박·전환·세트피스·체력·GK) 중 하나 |
+| `id` | string | `dr_xxx`(팀) / `drs_xxx`(개인, S6) — 기본 드릴은 id 가 고정이라 여러 기기에서 올려도 중복 시딩되지 않는다 |
+| `category` | `pass`\|`press`\|`transition`\|`setpiece`\|`fitness`\|`gk` | `DRILL_CATEGORIES`(패스·압박·전환·세트피스·체력·GK) 중 하나. 개인 드릴도 이 6개를 그대로 쓴다 |
+| `scope` | `team`\|`solo` | **S6.** `team`=팀 훈련 세션에서 담는 기존 15개, `solo`=혼자/2인이 하는 개인 드릴 21개. 훈련 세션 드릴 담기 화면은 `scope==='team'`만 보여준다 |
 | `name` | string | 드릴 이름 |
-| `desc` | string | 설명(2줄 정도, 최대 200자) |
-| `minutes` | number | 소요 분(기본값 — 세션에 담을 때 그대로 복사되고, 세션 안에서 따로 조정 가능) |
-| `players` | string | 필요 인원 메모 (예: "4인 이상") |
+| `desc` | string | 설명(초보자 눈높이 한 문장, 최대 220자 — 전문 용어는 괄호로 풀이) |
+| `minutes` | number | 소요 분(기본값 — 세션/과제에 담을 때 그대로 복사) |
+| `setsReps` | string | **S6, solo 전용.** "3세트 × 20회" 같은 세트×횟수 표기(최대 40자). 팀 드릴은 빈 문자열 |
+| `weeklyReps` | number\|null | **S6, solo 전용.** 주 권장 횟수(1~14). 팀 드릴은 `null` |
+| `players` | string | 필요 인원 메모 (예: "4인 이상" 팀 / "혼자"·"2인" 개인) |
 | `equipment` | string | 필요 장비 메모 |
+| `positions` | string[] | **S6, solo 전용.** 이 드릴이 맞는 포지션 태그(`FW`/`MF`/`DF`/`GK`), 빈 배열=전체 포지션 |
+| `weakTag` | string | **S6, solo 전용.** `WEAK_TAGS`(간단 체크 6항목 `speed`/`stamina`/`basic`/`shoot`/`defense`/`physical` + `gk`) 중 하나. 개인 과제 추천이 이 태그로 먼저 찾는다. 팀 드릴은 빈 문자열 |
 | `hidden` | boolean | **삭제가 없다** — 지난 세션·과제가 이 드릴을 참조하므로 숨김만 있다. 숨겨도 `byId()` 조회는 그대로 되고, 새로 담을 목록(`visible()`)에서만 빠진다 |
+
+**시딩(`seedDrills()`, S6)**: 저장된 드릴 목록에 기본 드릴(`DEFAULT_DRILLS` 15 + `DEFAULT_SOLO_DRILLS` 21) 중
+**아직 없는 id만** 더한다 — 처음 여는 기기는 36개 전부, 이미 팀 15개(+커스텀)만 있던 옛 저장본(S6 이전)은 개인 21개만
+새로 채워진다. 기존 드릴의 id·내용은 절대 건드리지 않아 세션·과제의 `drillId` 참조가 깨지지 않는다(데이터 손실 0).
+
+**개인 과제 추천 규칙(`recommendTasksFor()`, S6 갱신, 아래 11-3에서 이어짐)**: 약점 태그마다 **개인 드릴(`scope==='solo'`)을
+`weakTag` 로 먼저 찾고**, 그 태그의 개인 드릴이 없거나(숨김·미등록) 하면 `ABIL_DRILL_CATEGORY` 매핑으로 **팀 드릴을 후순위**로 찾는다.
 | `createdAt` / `updatedAt` | ISO string | |
 
 앱을 처음 열 때(`emptyState()`) 초기 15개가 자동으로 채워진다(`DEFAULT_DRILLS`, `store.js`). 카테고리 분포:
@@ -341,11 +361,11 @@ clubs/{clubId}                    name, adminUids[]
   화면은 `member.tests[testKey].sec` 를 다시 읽어 `baseline` 과 비교해 **재측정 전후 변화**를 보여 준다(9-1의 `analyzeMemberName` 과 같은 "화면이 매번 다시 계산" 원칙).
 - `done`/`doneAt`: 완료 체크와 그 시각.
 
-**추천 로직 (`recommendTasksFor()`, 규칙 기반 — AI 아님)**:
-1. 간단 체크 6항목 중 **평가된 것 가운데 가장 낮은 2항목**(`weakestAbilities()`, 미평가 항목은 후보에서 제외)을 고른다.
-2. 항목 → 드릴 카테고리 매핑(`ABIL_DRILL_CATEGORY`): 스피드·지구력→체력, 기본기→패스, 슈팅→세트피스, 수비→압박, 피지컬→전환.
-3. GK 회원(`member.gk` 또는 `pos==='GK'`)이면 GK 카테고리 드릴을 하나 우선 포함한다.
-4. 각 카테고리에서 숨기지 않은 드릴 1개씩 골라 과제로 추가한다(중복 없이).
+**추천 로직 (`recommendTasksFor()`, 규칙 기반 — AI 아님. S6, 2026-09-29 심야 갱신)**:
+1. 간단 체크 6항목 중 **평가된 것 가운데 가장 낮은 2항목**(`weakestAbilities()`, 미평가면 기본 `stamina`·`basic`)을 태그로 고른다.
+2. **각 태그마다 개인 드릴(`scope==='solo'`)을 `weakTag` 로 먼저 찾는다(S6, 우선순위 1위)** — 숨기지 않은 것 중 첫 번째.
+3. 그 태그의 개인 드릴이 없으면(숨김·미등록) `ABIL_DRILL_CATEGORY` 매핑(스피드·지구력→체력, 기본기→패스, 슈팅→세트피스, 수비→압박, 피지컬→전환, GK→GK)으로 **팀 드릴을 후순위로 대체**한다.
+4. GK 회원(`member.gk` 또는 `pos==='GK'`)이면 `gk` 태그를 맨 앞에 붙인다(개인 GK 드릴 우선, 없으면 팀 GK 드릴).
 5. `shuttle20`/`run1500` 측정 기록이 있으면 "재측정" 과제를 추가한다 — 목표는 현재 기록보다 살짝 빠른 값(20m 왕복 -0.3초, 1.5km -8초, 하한 있음).
 6. 최대 6개까지. 이 배열은 **저장 없이 반환만** 한다 — "이번 주 과제 만들기"를 눌러야 `personalPlans.add()` 로 저장된다.
 
@@ -356,3 +376,59 @@ clubs/{clubId}                    name, adminUids[]
 합치기(기본)에서 세 컬렉션 모두 **id 로 합친다**(처음 보는 id 만 추가) — 기본 드릴 15개는 기기 간 id 가 고정이라
 합쳐도 중복되지 않는다. `trainingSessions.attendees`/`drills[].drillId`, `personalPlans.memberId`/`tasks[].drillId` 는
 회원·상대·경기와 같은 방식으로 **이 기기 기준 id 로 다시 이어 붙인다**(`store.js importJSON()` 의 `remap`/`remapDrill`).
+
+## 12. 전술 플레이북 — Playbook (**S6, 2026-09-29 심야 구현**)
+
+사장님 피드백 "기본 전술은 내가 넣어야 되는 구조야? 개인 훈련도?" → 전술보드도 훈련(11장)과 같은 원칙으로 바꿨다:
+**미리 다 들어 있고, 감독은 고르고 고치기만 한다.** 전술보드 탭에 "기본 전술 불러오기" / "내 전술로 저장" 버튼 2개가 새로 붙는다.
+
+### 12-1. 내장 15개 — `BUILTIN_PLAYBOOKS` (store.js, **코드 상수**)
+
+**state 에 들어있지 않다** — 드릴(11장)과 달리 시딩하지 않는다. 앱 코드가 곧 데이터라서 앱을 업데이트하면 내장 목록도
+그대로 갱신되고, 사장님이 실수로 지우거나 망가뜨릴 수 없다("불변"). 구성:
+
+- **포메이션 변형 10개** = 5개 포메이션(`FORMATION_PRESETS`) × 대표 2개씩. 각 포메이션의 {수비 형태, 압박 시작점, 빌드업 패턴}
+  중 대표 2가지를 골랐다 — 좌표는 `layoutFormation()` 기본 배치에서 라인 높이만 밀어 올리거나(압박) 내려서(수비) 만든다(`pbShiftLines`).
+  화살표는 기존 경기 모드 빠른 지시 프리셋(`QUICK_INSTRUCTION_PRESETS`, 4-1장)을 그대로 재사용한다 — 좌표 검증이 이미
+  끝난 값이라 따로 손으로 좌표를 만들 필요가 없었다.
+- **세트피스 완성형 5개** = 코너킥 공격 A(니어·파포스트 크라우드)·B(숏코너 조합)·코너킥 수비(지역+대인 혼합)·
+  프리킥 공격(박스 앞 직접 프리킥)·킥오프 패턴. 이 5개만 **선수 11자리 배치까지 구체적으로** 잡혀 있다(`pbOurPinsCustom`/
+  `pbOppPinsCustom` — 기본 배치에서 몇 자리만 override). 공 위치(`ball`)는 기존 `SET_PIECE_TEMPLATES`(3장) 좌표를 그대로 쓴다.
+
+각 항목의 `note`(한 줄 설명)는 "초보 감독도 읽고 바로 이해"를 기준으로 썼다 — 전문 용어(압박·빌드업·하이라인·커버·
+니어/파포스트·숏코너·인프론트 등)는 처음 나올 때 괄호로 풀이한다("문안 원칙", CLAUDE.md 공통).
+
+### 12-2. Playbook — 스키마 (사용자 저장분은 `state.playbooks`, 내장은 `BUILTIN_PLAYBOOKS`, 같은 모양)
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string | 내장은 `pb_442_low` 처럼 고정 id, 사용자 저장분은 `pb_xxx`(uid) |
+| `name` | string | 전술 이름(최대 40자) |
+| `formation`/`oppFormation` | string | `FORMATION_PRESETS` 중 하나(우리/상대) |
+| `ourPins` | `[{x,y,gk}]` | 길이 = `formationSlots(formation).length`(항상 11). **`memberId`/`name` 을 담지 않는다** — 특정 선수에 매이지 않아야 어느 경기·어느 라인업에도 다시 쓸 수 있다 |
+| `oppPins` | `[{x,y,pos}]` | 길이 = `formationSlots(oppFormation).length`. BoardSnapshot(4장)의 상대 핀과 같은 모양(이름 없이 포지션 표식만) |
+| `arrows` | `[{x1,y1,x2,y2,style}]` | BoardSnapshot과 같은 좌표계(0~100%, y×1.5 는 그릴 때만) |
+| `ball` | `{x,y}`\|null | 세트피스 완성형만 채워진다(대부분) |
+| `note` | string | 한 줄 설명(최대 220자) |
+| `kind` | string | `defense`\|`press`\|`buildup`\|`setpiece` — 화면 배지 표시용 |
+| `builtin` | boolean | `true`=내장(BUILTIN_PLAYBOOKS), `false`=사용자 저장. **`store.playbooks.add/update()`는 항상 `false`로 강제한다** — 사장님이 보낸 값이 `true`여도 무시 |
+| `createdAt`/`updatedAt` | ISO string | |
+
+정규화는 `normalizePlaybook()`(store.js) — 좌표 0~100 클램프, `ourPins`/`oppPins` 길이를 포메이션 슬롯 수로 패딩/절단,
+모르는 포메이션은 `FORMATION_PRESETS[0]`으로 대체한다(BoardSnapshot의 `normalizeBoardSnapshot`과 같은 원칙 — 깨진 저장본도 화면이 죽지 않는다).
+
+### 12-3. 불러오기 → 적용 → 고치기 → 저장 흐름 (app.js)
+
+1. **불러오기**(`playbookLibrarySheet()`): "내 전술"(사용자 저장분, 최근 순) 먼저, "기본 전술"(내장 15개) 그다음 목록.
+2. **적용**(`applyPlaybookToBoard()`): 플레이북의 좌표·화살표·공을 보드(`bd`)에 그대로 얹되, **지금 배치된 선수는 자리
+   순서(index)대로 새 좌표에 옮겨 얹는다** — 포메이션이 바뀌어도 누가 어디 있었는지는 최대한 유지한다(기존 `reflowOurFormation`과
+   같은 원칙). 내장이든 사용자 것이든 **항상 깊은 복사**해서 쓴다 — `BUILTIN_PLAYBOOKS` 원본은 절대 변형되지 않는다.
+3. **손으로 고치기**: 기존 보드 도구(드래그·화살표·세트피스 템플릿) 그대로 — 플레이북 적용과 무관하게 동작한다.
+4. **내 전술로 저장**(`savePlaybookModal()` → `savePlaybookFromBoard()`): 지금 보드의 좌표·화살표·공을 이름 붙여
+   `store.playbooks.add()`로 저장한다. **선수 이름(memberId)은 담기지 않는다** — 다음 경기·다른 라인업에도 다시 쓸 수 있어야 하기 때문.
+   내장 플레이북을 고쳐서 저장해도 새 id 가 발급될 뿐, 원본(`BUILTIN_PLAYBOOKS`)은 그대로다("수정 시 복사본").
+
+### 12-4. 가져오기(JSON)
+
+`exportJSON()`은 `state.playbooks`(사용자 저장분)만 싣는다 — 내장 15개는 코드 상수라 백업 파일에 없다(앱만 있으면 항상 있다).
+합치기(기본)에서 id 로 합친다(처음 보는 id 만 추가) — 회원 id 를 담지 않는 스키마라 다시 이을 참조도 없다.

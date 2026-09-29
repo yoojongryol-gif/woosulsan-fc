@@ -395,6 +395,11 @@ main {
   animation: pop .2s ease-out;
 }
 .toast.err { background: var(--danger); color: #fff; }
+.toast.toast-undo { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+.toast-undo-btn {
+  background: transparent; border: none; color: var(--gold); font-weight: 800; font-size: 13px;
+  padding: 2px 4px; cursor: pointer;
+}
 @keyframes pop { from { transform: translateY(10px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
 .search-wrap { position: relative; margin-bottom: 10px; }
@@ -1032,6 +1037,16 @@ a.btn { text-decoration: none; }
 .drill-row .dr-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; margin-bottom: 4px; }
 .drill-row .dr-meta { font-size: 11px; color: var(--text-3); font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; }
 .drill-row .dr-act { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+
+/* ================= 전술 플레이북 (S6, 2026-09-29 심야) ================= */
+.pb-list { display: flex; flex-direction: column; gap: 8px; }
+.pb-row {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 11px 12px;
+}
+.pb-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; }
+.pb-top b { font-size: 14px; font-weight: 800; }
+.pb-note { font-size: 12px; color: var(--text-2); line-height: 1.5; }
 
 .sesslist-picked { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .sess-drill-row {

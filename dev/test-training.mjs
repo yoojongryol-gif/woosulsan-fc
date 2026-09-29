@@ -1,8 +1,9 @@
-/* S5 단위 테스트 (node dev/test-training.mjs) — 팀 훈련 + 개인 훈련
- * 마스터플랜 C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md §7(S5)
- * 검증 대상: 드릴 라이브러리 시딩(15개·6카테고리)·숨김(삭제 아님)·세션 보존,
- *           팀 훈련 세션 CRUD·드릴 합계 분, 개인 훈련 규칙 기반 추천·완료 체크·주 계산,
- *           회원 삭제 시 과제 처리(데이터 손실 0), JSON 백업 왕복(합치기 기본, id 재연결).
+/* S5/S6 단위 테스트 (node dev/test-training.mjs) — 팀 훈련 + 개인 훈련
+ * 마스터플랜 C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md §7(S5) + S6(개인 드릴 확장, 2026-09-29 심야)
+ * 검증 대상: 드릴 라이브러리 시딩(팀15+개인21=36개·6카테고리)·숨김(삭제 아님)·세션 보존,
+ *           팀 훈련 세션 CRUD·드릴 합계 분, 개인 훈련 규칙 기반 추천(개인 드릴 weakTag 우선·팀 드릴 후순위)·완료 체크·주 계산,
+ *           회원 삭제 시 과제 처리(데이터 손실 0), JSON 백업 왕복(합치기 기본, id 재연결),
+ *           옛 저장본(팀 15개만) 업그레이드 시 개인 21개만 추가되고 기존·커스텀 드릴은 그대로.
  * 실행: node dev/test-training.mjs
  */
 process.env.TZ = 'Asia/Seoul';
@@ -24,30 +25,36 @@ function memAdapter() {
 memAdapter();
 
 const {
-  createStore, DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, DEFAULT_DRILLS,
+  createStore, DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, DEFAULT_DRILLS, DEFAULT_SOLO_DRILLS, WEAK_TAGS,
   weekMondayOf, currentWeekMonday, weekLabel, weakestAbilities, recommendTasksFor,
   trainingSessionDrillMinutes, normalizeDrill,
 } = await import('../store.js');
 
-console.log('\n[1] 드릴 라이브러리 시딩');
+console.log('\n[1] 드릴 라이브러리 시딩 (S6: 팀 15 + 개인 21 = 36)');
 ok('카테고리 6개', DRILL_CATEGORIES.length === 6);
-ok('기본 드릴 15개', DEFAULT_DRILLS.length === 15);
-ok('모든 기본 드릴이 6카테고리 중 하나', DEFAULT_DRILLS.every((d) => DRILL_CATEGORY_KEYS.includes(d.category)));
+ok('기본 팀 드릴 15개', DEFAULT_DRILLS.length === 15);
+ok('기본 팀 드릴은 모두 scope=team', DEFAULT_DRILLS.every((d) => d.scope === 'team'));
+ok('개인 드릴 21개', DEFAULT_SOLO_DRILLS.length === 21);
+ok('개인 드릴은 모두 scope=solo', DEFAULT_SOLO_DRILLS.every((d) => d.scope === 'solo'));
+ok('약점 태그 7개(간단체크 6 + gk)', WEAK_TAGS.length === 7 && WEAK_TAGS.includes('gk'));
+ok('개인 드릴은 모두 유효한 weakTag', DEFAULT_SOLO_DRILLS.every((d) => WEAK_TAGS.includes(d.weakTag)));
+ok('7개 태그 모두 개인 드릴이 2개 이상', WEAK_TAGS.every((tag) => DEFAULT_SOLO_DRILLS.filter((d) => d.weakTag === tag).length >= 2));
+ok('모든 기본 드릴이 6카테고리 중 하나', [...DEFAULT_DRILLS, ...DEFAULT_SOLO_DRILLS].every((d) => DRILL_CATEGORY_KEYS.includes(d.category)));
 
 const store = createStore();
 await store.init();
-ok('앱 시작 시 15개 자동 시딩', store.drills.all().length === 15);
+ok('앱 시작 시 36개(팀15+개인21) 자동 시딩', store.drills.all().length === 36, `count=${store.drills.all().length}`);
 ok('카테고리별 1개 이상', DRILL_CATEGORIES.every((c) => store.drills.byCategory(c.key).length >= 1),
   DRILL_CATEGORIES.map((c) => `${c.key}:${store.drills.byCategory(c.key).length}`).join(' '));
 
 console.log('\n[2] 드릴 추가·수정·숨김 (삭제 없음)');
 const custom = store.drills.add({ category: 'pass', name: '커스텀 드릴', desc: '테스트용', minutes: 20, players: '전체', equipment: '없음' });
-ok('직접 추가', store.drills.all().length === 16 && custom.name === '커스텀 드릴');
+ok('직접 추가', store.drills.all().length === 37 && custom.name === '커스텀 드릴');
 store.drills.update(custom.id, { minutes: 25 });
 ok('수정', store.drills.byId(custom.id).minutes === 25);
 store.drills.setHidden(custom.id, true);
 ok('숨기면 visible() 에서 빠진다', !store.drills.visible().some((d) => d.id === custom.id));
-ok('숨겨도 all()/byId() 에는 그대로 남는다(삭제 아님)', store.drills.all().length === 16 && !!store.drills.byId(custom.id));
+ok('숨겨도 all()/byId() 에는 그대로 남는다(삭제 아님)', store.drills.all().length === 37 && !!store.drills.byId(custom.id));
 
 console.log('\n[3] 주 계산 (weekMondayOf)');
 ok('화요일 → 그 주 월요일', weekMondayOf('2026-09-29') === '2026-09-28');
@@ -96,6 +103,7 @@ console.log('\n[6] 개인 훈련 — 규칙 기반 추천 (AI 아님)');
   ok('GK 회원은 GK 드릴이 추천에 포함', tasks.some((t) => store.drills.byId(t.drillId)?.category === 'gk'), JSON.stringify(tasks));
   ok('약점 카테고리(체력) 드릴 포함', tasks.some((t) => store.drills.byId(t.drillId)?.category === 'fitness'));
   ok('추천은 6개 이하', tasks.length <= 6);
+  ok('S6: 약점 태그 추천은 개인 드릴(scope=solo)이 우선', tasks.some((t) => store.drills.byId(t.drillId)?.scope === 'solo'), JSON.stringify(tasks));
 
   store.members.setTest(m.id, 'shuttle20', 9.4);
   const tasks2 = recommendTasksFor(store.members.byId(m.id), store.drills.visible());
@@ -158,7 +166,7 @@ console.log('\n[9] JSON 백업 왕복 (drills·trainingSessions·personalPlans �
   const r = await dst.importJSON(json);
   ok('가져오기 결과에 훈련 데이터 수 포함', r.trainingSessions === 1 && r.personalPlans === 1, JSON.stringify(r));
 
-  ok('커스텀 드릴 왕복(기본 15개 + 1)', dst.drills.all().length === 16);
+  ok('커스텀 드릴 왕복(기본 36개 + 1)', dst.drills.all().length === 37, `count=${dst.drills.all().length}`);
   const tsD = dst.trainingSessions.all().find((x) => x.notes === '왕복');
   ok('세션 필드 왕복', tsD && tsD.theme === '왕복테스트' && tsD.minutes === 40);
   ok('세션의 커스텀 drillId 가 새 기기 기준으로 이어진다', tsD.drills[0].drillId && !!dst.drills.byId(tsD.drills[0].drillId));
@@ -171,12 +179,12 @@ console.log('\n[9] JSON 백업 왕복 (drills·trainingSessions·personalPlans �
 
   console.log('\n[10] 합치기 재실행 — id 가 같은 세션·과제·드릴은 중복으로 늘지 않는다');
   const r2 = await dst.importJSON(json, { merge: true });
-  ok('드릴 중복 없음', dst.drills.all().length === 16, `count=${dst.drills.all().length}`);
+  ok('드릴 중복 없음', dst.drills.all().length === 37, `count=${dst.drills.all().length}`);
   ok('세션 중복 없음', dst.trainingSessions.all().length === 1, `count=${dst.trainingSessions.all().length}`);
   ok('과제 중복 없음', dst.personalPlans.all().length === 1, `count=${dst.personalPlans.all().length}`);
 }
 
-console.log('\n[11] 마이그레이션 — 옛 데이터(S4 이전, drills 필드 없음)에 처음 진입해도 15개가 시딩된다');
+console.log('\n[11] 마이그레이션 — 옛 데이터(S4 이전, drills 필드 없음)에 처음 진입해도 36개(팀15+개인21)가 시딩된다');
 {
   memAdapter();
   const s4 = createStore();
@@ -187,8 +195,40 @@ console.log('\n[11] 마이그레이션 — 옛 데이터(S4 이전, drills 필�
   globalThis.localStorage.setItem('woosulsan-fc:v1', JSON.stringify(raw));
   const s5 = createStore();
   await s5.init();
-  ok('drills 필드가 없던 저장본도 15개로 시딩', s5.drills.all().length === 15);
+  ok('drills 필드가 없던 저장본도 36개로 시딩', s5.drills.all().length === 36, `count=${s5.drills.all().length}`);
   ok('trainingSessions/personalPlans 는 빈 배열로 시작', s5.trainingSessions.all().length === 0 && s5.personalPlans.all().length === 0);
+}
+
+console.log('\n[12] 마이그레이션 — 팀 15개만 있던 옛 저장본(S6 이전)은 개인 21개만 더해지고 기존·커스텀은 그대로 (데이터 손실 0)');
+{
+  memAdapter();
+  const rawOld = {
+    schema: 3, club: {}, members: [], matches: [], opponents: [], tactics: [],
+    drills: [...DEFAULT_DRILLS, { id: 'dr_custom_old', category: 'pass', name: '옛날 커스텀 드릴', desc: '', minutes: 10, players: '', equipment: '', hidden: false }],
+  };
+  globalThis.localStorage.setItem('woosulsan-fc:v1', JSON.stringify(rawOld));
+  const upgraded = createStore();
+  await upgraded.init();
+  ok('팀15 + 커스텀1 + 개인21 = 37개', upgraded.drills.all().length === 37, `count=${upgraded.drills.all().length}`);
+  ok('기존 커스텀 드릴 id 보존(데이터 손실 0)', !!upgraded.drills.byId('dr_custom_old'));
+  ok('팀 드릴 15개 id 도 그대로 보존', DEFAULT_DRILLS.every((d) => !!upgraded.drills.byId(d.id)));
+  ok('개인 드릴 21개가 새로 채워진다', DEFAULT_SOLO_DRILLS.every((d) => !!upgraded.drills.byId(d.id)));
+}
+
+console.log('\n[13] 개인 과제 추천 규칙 — 개인 드릴(solo) 우선, 없을 때만 팀 드릴로 후순위 대체 (S6)');
+{
+  const s6 = createStore();
+  await s6.init();
+  const m = s6.members.add({ name: '태그검증', pos: 'FW' });
+  s6.members.setAbil(m.id, { speed: 1, stamina: 5, basic: 5, shoot: 5, defense: 5, physical: 5 });   // speed 가 압도적 최약점
+  const tasks = recommendTasksFor(s6.members.byId(m.id), s6.drills.visible());
+  const first = s6.drills.byId(tasks[0].drillId);
+  ok('가장 낮은 약점(speed) 과제는 개인 드릴이 먼저 온다', first && first.scope === 'solo' && first.weakTag === 'speed', JSON.stringify(first));
+
+  for (const d of s6.drills.all().filter((x) => x.scope === 'solo' && x.weakTag === 'speed')) s6.drills.setHidden(d.id, true);
+  const tasks2 = recommendTasksFor(s6.members.byId(m.id), s6.drills.visible());
+  const fallback = s6.drills.byId(tasks2[0].drillId);
+  ok('개인 드릴이 전부 숨겨지면 팀 드릴(fitness 카테고리)로 후순위 대체', fallback && fallback.scope === 'team' && fallback.category === 'fitness', JSON.stringify(fallback));
 }
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);

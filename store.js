@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.1.0';
+export const MODULE_VERSION = 'v1.1.1';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -526,10 +526,13 @@ export function computeRecordFor(matches, opponentId) {
   return rec;
 }
 
-/* ---------------- 훈련 — 드릴 라이브러리 (S5, 2026-09-29) ----------------
+/* ---------------- 훈련 — 드릴 라이브러리 (S5, 2026-09-29 / S6 개인 드릴 확장, 2026-09-29 심야) ----------------
  * 마스터플랜 §7: 팀 훈련 드릴 초기 15개 + 직접 추가/수정/숨김.
  * 드릴은 "삭제"가 없다 — 지난 훈련 세션이 그 드릴을 참조하므로, 숨김(hidden)만 있다.
  * 숨긴 드릴도 이미 담긴 세션에는 그대로 남고(참조로 조회), 새로 담을 목록에서만 빠진다.
+ * S6: `scope` 로 팀 드릴(team, 기존 15개)과 개인 드릴(solo, 새 21개)을 가른다.
+ * 개인 드릴은 `weakTag`(간단 체크 6항목 + gk = WEAK_TAGS)로 약점과 직접 이어져 있어
+ * recommendTasksFor() 가 팀 드릴 카테고리 매핑보다 먼저 찾는다(아래 §추천 규칙 참고).
  */
 export const DRILL_CATEGORIES = [
   { key: 'pass', label: '패스' },
@@ -541,41 +544,318 @@ export const DRILL_CATEGORIES = [
 ];
 export const DRILL_CATEGORY_KEYS = DRILL_CATEGORIES.map((c) => c.key);
 
-/** 초기 15개 — id 를 고정해 두어 여러 기기에서 올려도(migrate) 중복 시딩되지 않는다 */
+/** 개인 드릴 약점 태그 — 간단 체크 6항목(ABILITY_KEYS) + 골키퍼 전용 'gk'. 순서 고정 */
+export const WEAK_TAGS = [...ABILITY_KEYS, 'gk'];
+
+/** 초기 15개(팀 훈련) — id 를 고정해 두어 여러 기기에서 올려도(migrate) 중복 시딩되지 않는다 */
 export const DEFAULT_DRILLS = [
-  { id: 'dr_pass_01', category: 'pass', name: '삼각패스 로테이션', desc: '세 명이 삼각형을 이뤄 원터치 패스를 주고받는다. 위치를 계속 바꿔가며 패스 정확도와 시야를 기른다.', minutes: 15, players: '3인 이상', equipment: '콘 3개' },
-  { id: 'dr_pass_02', category: 'pass', name: '론도 (볼 점유)', desc: '4~6명이 원 안의 수비 1~2명을 상대로 볼을 돌린다. 압박 속 패스 타이밍과 볼 컨트롤을 기른다.', minutes: 15, players: '5인 이상', equipment: '조끼 2벌' },
-  { id: 'dr_pass_03', category: 'pass', name: '롱패스 정확도', desc: '20~30m 거리에서 지정된 표적(콘)으로 롱패스를 연습한다. 킥 정확도와 파워를 기른다.', minutes: 15, players: '2인 1조', equipment: '콘 4개' },
-  { id: 'dr_press_01', category: 'press', name: '2대1 압박 게임', desc: '좁은 구역에서 공격 1명을 수비 2명이 협력 압박한다. 협력 수비와 즉각 전방 압박을 기른다.', minutes: 12, players: '3인 1조', equipment: '콘 4개' },
-  { id: 'dr_press_02', category: 'press', name: '스위칭 압박 라인', desc: '수비 라인 전체가 신호에 맞춰 동시에 전진·후퇴하며 압박 타이밍을 맞춘다.', minutes: 15, players: '4인 이상', equipment: '콘 8개' },
-  { id: 'dr_trans_01', category: 'transition', name: '역습 3대2', desc: '수비 상황에서 볼을 뺏으면 즉시 3명이 2명 수비를 상대로 빠른 역습을 전개한다.', minutes: 15, players: '5인 1조', equipment: '미니골 1개' },
-  { id: 'dr_trans_02', category: 'transition', name: '공수 전환 셔틀', desc: '볼을 빼앗기면 즉시 되찾기 위해 전원이 반대 방향으로 전력 질주한다. 전환 속도를 기른다.', minutes: 12, players: '전체', equipment: '조끼 2벌' },
-  { id: 'dr_setpiece_01', category: 'setpiece', name: '코너킥 마무리', desc: '지정된 코너킥 루틴대로 크로스를 올리고 지정 선수가 헤딩·발리로 마무리한다.', minutes: 15, players: '6인 이상', equipment: '미니골 1개' },
-  { id: 'dr_setpiece_02', category: 'setpiece', name: '프리킥 직접 슈팅', desc: '박스 앞 지정 거리에서 수비벽을 세우고 직접 프리킥 슈팅을 반복한다. 감아차기와 파워킥을 번갈아 연습한다.', minutes: 15, players: '3인 이상', equipment: '미니골·조끼' },
-  { id: 'dr_setpiece_03', category: 'setpiece', name: '박스 안 마무리 슈팅', desc: '크로스·컷백을 받아 박스 안에서 원터치·투터치로 마무리하는 슈팅 감각을 기른다.', minutes: 12, players: '4인 이상', equipment: '미니골 1개' },
-  { id: 'dr_fitness_01', category: 'fitness', name: '20m 왕복 셔틀런', desc: '20m 구간을 신호에 맞춰 왕복 질주한다. 스피드·순발력 측정 종목과 같은 방식으로 훈련한다.', minutes: 10, players: '전체', equipment: '콘 2개' },
-  { id: 'dr_fitness_02', category: 'fitness', name: '인터벌 러닝', desc: '1분 전력 질주 + 1분 걷기를 반복한다. 경기 후반 지구력을 기른다.', minutes: 15, players: '전체', equipment: '없음' },
-  { id: 'dr_fitness_03', category: 'fitness', name: '사다리·콘 민첩성', desc: '어질리티 사다리와 지그재그 콘 드리블로 순발력과 방향전환 능력을 기른다.', minutes: 10, players: '개인 가능', equipment: '어질리티 사다리·콘 6개' },
-  { id: 'dr_gk_01', category: 'gk', name: '반응 캐칭', desc: '짧은 거리에서 다양한 방향의 슈팅을 받아 반응 속도와 캐칭 안정성을 기른다.', minutes: 15, players: '골키퍼+슈터 1명', equipment: '공 10개' },
-  { id: 'dr_gk_02', category: 'gk', name: '크로스 처리·배급', desc: '크로스를 잡거나 펀칭한 뒤 빠르게 역습 배급까지 이어가는 흐름을 연습한다.', minutes: 15, players: '골키퍼+2인', equipment: '공 8개' },
+  { id: 'dr_pass_01', category: 'pass', scope: 'team', name: '삼각패스 로테이션', desc: '세 명이 삼각형을 이뤄 원터치 패스를 주고받는다. 위치를 계속 바꿔가며 패스 정확도와 시야를 기른다.', minutes: 15, players: '3인 이상', equipment: '콘 3개' },
+  { id: 'dr_pass_02', category: 'pass', scope: 'team', name: '론도 (볼 점유)', desc: '4~6명이 원 안의 수비 1~2명을 상대로 볼을 돌린다. 압박 속 패스 타이밍과 볼 컨트롤을 기른다.', minutes: 15, players: '5인 이상', equipment: '조끼 2벌' },
+  { id: 'dr_pass_03', category: 'pass', scope: 'team', name: '롱패스 정확도', desc: '20~30m 거리에서 지정된 표적(콘)으로 롱패스를 연습한다. 킥 정확도와 파워를 기른다.', minutes: 15, players: '2인 1조', equipment: '콘 4개' },
+  { id: 'dr_press_01', category: 'press', scope: 'team', name: '2대1 압박 게임', desc: '좁은 구역에서 공격 1명을 수비 2명이 협력 압박한다. 협력 수비와 즉각 전방 압박을 기른다.', minutes: 12, players: '3인 1조', equipment: '콘 4개' },
+  { id: 'dr_press_02', category: 'press', scope: 'team', name: '스위칭 압박 라인', desc: '수비 라인 전체가 신호에 맞춰 동시에 전진·후퇴하며 압박 타이밍을 맞춘다.', minutes: 15, players: '4인 이상', equipment: '콘 8개' },
+  { id: 'dr_trans_01', category: 'transition', scope: 'team', name: '역습 3대2', desc: '수비 상황에서 볼을 뺏으면 즉시 3명이 2명 수비를 상대로 빠른 역습을 전개한다.', minutes: 15, players: '5인 1조', equipment: '미니골 1개' },
+  { id: 'dr_trans_02', category: 'transition', scope: 'team', name: '공수 전환 셔틀', desc: '볼을 빼앗기면 즉시 되찾기 위해 전원이 반대 방향으로 전력 질주한다. 전환 속도를 기른다.', minutes: 12, players: '전체', equipment: '조끼 2벌' },
+  { id: 'dr_setpiece_01', category: 'setpiece', scope: 'team', name: '코너킥 마무리', desc: '지정된 코너킥 루틴대로 크로스를 올리고 지정 선수가 헤딩·발리로 마무리한다.', minutes: 15, players: '6인 이상', equipment: '미니골 1개' },
+  { id: 'dr_setpiece_02', category: 'setpiece', scope: 'team', name: '프리킥 직접 슈팅', desc: '박스 앞 지정 거리에서 수비벽을 세우고 직접 프리킥 슈팅을 반복한다. 감아차기와 파워킥을 번갈아 연습한다.', minutes: 15, players: '3인 이상', equipment: '미니골·조끼' },
+  { id: 'dr_setpiece_03', category: 'setpiece', scope: 'team', name: '박스 안 마무리 슈팅', desc: '크로스·컷백을 받아 박스 안에서 원터치·투터치로 마무리하는 슈팅 감각을 기른다.', minutes: 12, players: '4인 이상', equipment: '미니골 1개' },
+  { id: 'dr_fitness_01', category: 'fitness', scope: 'team', name: '20m 왕복 셔틀런', desc: '20m 구간을 신호에 맞춰 왕복 질주한다. 스피드·순발력 측정 종목과 같은 방식으로 훈련한다.', minutes: 10, players: '전체', equipment: '콘 2개' },
+  { id: 'dr_fitness_02', category: 'fitness', scope: 'team', name: '인터벌 러닝', desc: '1분 전력 질주 + 1분 걷기를 반복한다. 경기 후반 지구력을 기른다.', minutes: 15, players: '전체', equipment: '없음' },
+  { id: 'dr_fitness_03', category: 'fitness', scope: 'team', name: '사다리·콘 민첩성', desc: '어질리티 사다리와 지그재그 콘 드리블로 순발력과 방향전환 능력을 기른다.', minutes: 10, players: '개인 가능', equipment: '어질리티 사다리·콘 6개' },
+  { id: 'dr_gk_01', category: 'gk', scope: 'team', name: '반응 캐칭', desc: '짧은 거리에서 다양한 방향의 슈팅을 받아 반응 속도와 캐칭 안정성을 기른다.', minutes: 15, players: '골키퍼+슈터 1명', equipment: '공 10개' },
+  { id: 'dr_gk_02', category: 'gk', scope: 'team', name: '크로스 처리·배급', desc: '크로스를 잡거나 펀칭한 뒤 빠르게 역습 배급까지 이어가는 흐름을 연습한다.', minutes: 15, players: '골키퍼+2인', equipment: '공 8개' },
+];
+
+/** 개인 드릴 21개(S6, 2026-09-29 심야) — 혼자/2인이 할 수 있는 드릴.
+ * id 를 dr_ 이 아니라 drs_ 로 고정해 팀 드릴과 절대 겹치지 않게 한다(migrate 추가 시딩의 근거).
+ * weakTag 로 간단 체크 약점과 직접 이어진다 — recommendTasksFor() 가 우선 찾는다.
+ */
+export const DEFAULT_SOLO_DRILLS = [
+  { id: 'drs_basic_01', category: 'pass', scope: 'solo', weakTag: 'basic', positions: [], name: '벽치기 패스', desc: '벽에 공을 차서 되받는 걸 반복한다. 왼발·오른발 번갈아 차며 볼 감각(기본기)을 기른다.', setsReps: '3세트 × 30회', weeklyReps: 3, minutes: 15, players: '혼자', equipment: '벽·공 1개' },
+  { id: 'drs_basic_02', category: 'pass', scope: 'solo', weakTag: 'basic', positions: [], name: '드리블 콘 지그재그', desc: '콘 8개를 지그재그로 세우고 그 사이를 드리블로 통과한다. 방향 전환하며 볼 컨트롤(공을 다루는 능력)을 기른다.', setsReps: '4세트 × 콘 8개 왕복', weeklyReps: 3, minutes: 12, players: '혼자', equipment: '콘 8개' },
+  { id: 'drs_basic_03', category: 'pass', scope: 'solo', weakTag: 'basic', positions: [], name: '제자리 볼 터치', desc: '공을 바닥에 두고 인사이드(발 안쪽)로 좌우로 톡톡 건드린다. 짧은 시간에 많이 반복해 터치 감각을 기른다.', setsReps: '3세트 × 1분', weeklyReps: 4, minutes: 10, players: '혼자', equipment: '공 1개' },
+  { id: 'drs_basic_04', category: 'pass', scope: 'solo', weakTag: 'basic', positions: [], name: '저글링(리프팅)', desc: '공을 땅에 떨어뜨리지 않고 발로 계속 튕긴다. 떨어질 때까지가 한 세트 — 볼과 친해지는 기초 훈련이다.', setsReps: '5세트 × 되는 만큼', weeklyReps: 4, minutes: 10, players: '혼자', equipment: '공 1개' },
+  { id: 'drs_basic_05', category: 'pass', scope: 'solo', weakTag: 'basic', positions: [], name: '원터치 벽패스', desc: '벽이나 파트너를 상대로 공을 받자마자 한 번에 다시 차서 돌려준다(원터치: 멈추지 않고 바로 차기). 빠른 패스 감각을 기른다.', setsReps: '3세트 × 40회', weeklyReps: 2, minutes: 15, players: '2인', equipment: '벽 또는 파트너·공 1개' },
+
+  { id: 'drs_speed_01', category: 'fitness', scope: 'solo', weakTag: 'speed', positions: [], name: '20m 스프린트 반복', desc: '20m 거리를 있는 힘껏 전력 질주한다. 쉬고 다시 뛰기를 반복해 순간 스피드를 기른다.', setsReps: '8세트 × 20m', weeklyReps: 2, minutes: 15, players: '혼자', equipment: '콘 2개' },
+  { id: 'drs_speed_02', category: 'fitness', scope: 'solo', weakTag: 'speed', positions: [], name: '사다리 스텝(어질리티)', desc: '바닥에 놓은 어질리티 사다리(발 스텝 연습용 줄사다리) 칸을 빠르게 밟고 지나간다. 발놀림 속도를 기른다.', setsReps: '4세트 × 사다리 1왕복', weeklyReps: 3, minutes: 10, players: '혼자', equipment: '어질리티 사다리' },
+  { id: 'drs_speed_03', category: 'fitness', scope: 'solo', weakTag: 'speed', positions: [], name: '10m 왕복 가속', desc: '콘 두 개 사이 10m를 최대한 빠르게 왕복해서 뛴다. 출발할 때 순간적으로 치고 나가는 힘을 기른다.', setsReps: '6세트 × 10m 왕복', weeklyReps: 2, minutes: 12, players: '혼자', equipment: '콘 2개' },
+
+  { id: 'drs_stamina_01', category: 'fitness', scope: 'solo', weakTag: 'stamina', positions: [], name: '30분 조깅', desc: '숨이 살짝 찰 정도의 속도로 30분을 쉬지 않고 달린다. 경기를 끝까지 뛸 수 있는 기초 체력을 기른다.', setsReps: '1세트 × 30분', weeklyReps: 3, minutes: 30, players: '혼자', equipment: '없음' },
+  { id: 'drs_stamina_02', category: 'fitness', scope: 'solo', weakTag: 'stamina', positions: [], name: '인터벌 러닝(개인)', desc: '1분 전력 질주와 1분 걷기를 번갈아 10번 반복한다(인터벌: 강한 운동과 쉬는 시간을 번갈아 하는 방식). 후반 체력을 기른다.', setsReps: '1분 질주+1분 걷기 × 10회', weeklyReps: 2, minutes: 20, players: '혼자', equipment: '없음' },
+  { id: 'drs_stamina_03', category: 'fitness', scope: 'solo', weakTag: 'stamina', positions: [], name: '계단 오르내리기', desc: '가까운 계단을 빠르게 오르고 천천히 내려오길 반복한다. 다리 지구력과 심폐 능력을 함께 기른다.', setsReps: '10세트 × 계단 1왕복', weeklyReps: 2, minutes: 15, players: '혼자', equipment: '계단' },
+
+  { id: 'drs_shoot_01', category: 'setpiece', scope: 'solo', weakTag: 'shoot', positions: ['FW', 'MF'], name: '슈팅 반복(인프론트)', desc: '발등(인프론트)으로 공을 정확히 맞춰 미니골이나 벽을 향해 슈팅한다. 슈팅 정확도를 기른다.', setsReps: '5세트 × 10회', weeklyReps: 3, minutes: 15, players: '혼자 또는 2인', equipment: '미니골 또는 벽·공 5개' },
+  { id: 'drs_shoot_02', category: 'setpiece', scope: 'solo', weakTag: 'shoot', positions: ['FW', 'MF'], name: '프리킥 감아차기', desc: '박스 앞에서 공을 휘어 차는(감아차기) 프리킥을 반복 연습한다. 정확한 임팩트(공을 맞히는 순간)를 기른다.', setsReps: '4세트 × 8회', weeklyReps: 2, minutes: 15, players: '혼자', equipment: '미니골·공 5개' },
+  { id: 'drs_shoot_03', category: 'setpiece', scope: 'solo', weakTag: 'shoot', positions: ['FW'], name: '논스톱 슈팅', desc: '파트너가 공을 던져주면 멈추지 않고 한 번에 슈팅한다(논스톱: 멈추지 않고 바로 이어서). 빠른 마무리 감각을 기른다.', setsReps: '5세트 × 10회', weeklyReps: 2, minutes: 12, players: '2인', equipment: '미니골·공 5개' },
+
+  { id: 'drs_def_01', category: 'press', scope: 'solo', weakTag: 'defense', positions: ['DF'], name: '1대1 수비 스텝', desc: '상대 없이 허공을 보고 좌우로 사이드 스텝(옆으로 재빠르게 움직이는 스텝)을 반복한다. 수비 자세와 반응을 기른다.', setsReps: '4세트 × 30초', weeklyReps: 3, minutes: 12, players: '혼자', equipment: '콘 4개' },
+  { id: 'drs_def_02', category: 'press', scope: 'solo', weakTag: 'defense', positions: ['DF'], name: '백스텝·턴 반복', desc: '뒤로 물러나는 백스텝과 돌아서는 턴을 신호에 맞춰 반복한다. 공격수를 놓치지 않는 수비 움직임을 기른다.', setsReps: '5세트 × 10회', weeklyReps: 3, minutes: 10, players: '혼자', equipment: '콘 2개' },
+
+  { id: 'drs_phys_01', category: 'fitness', scope: 'solo', weakTag: 'physical', positions: [], name: '코어 플랭크 서킷', desc: '팔꿈치로 몸을 버티는 플랭크(엎드려 몸을 일직선으로 버티는 동작) 자세를 정해진 시간 유지한다. 몸싸움에 버티는 코어(몸통) 힘을 기른다.', setsReps: '3세트 × 40초', weeklyReps: 4, minutes: 12, players: '혼자', equipment: '매트' },
+  { id: 'drs_phys_02', category: 'fitness', scope: 'solo', weakTag: 'physical', positions: [], name: '하체 스쿼트·런지', desc: '스쿼트(무릎을 굽혔다 펴는 동작)와 런지(한 발씩 앞으로 내딛는 동작)를 번갈아 반복한다. 하체 힘을 길러 몸싸움에 버틴다.', setsReps: '3세트 × 15회', weeklyReps: 3, minutes: 15, players: '혼자', equipment: '없음' },
+
+  { id: 'drs_gk_01', category: 'gk', scope: 'solo', weakTag: 'gk', positions: ['GK'], name: 'GK 반응 캐칭(벽토스)', desc: '벽이나 파트너가 던져주는 공을 짧은 거리에서 재빠르게 받아낸다. 순간 반응 속도를 기른다.', setsReps: '5세트 × 10회', weeklyReps: 3, minutes: 15, players: '혼자 또는 2인', equipment: '벽 또는 파트너·공 1개' },
+  { id: 'drs_gk_02', category: 'gk', scope: 'solo', weakTag: 'gk', positions: ['GK'], name: 'GK 다이빙 캐칭 기초', desc: '매트 위에서 좌우로 몸을 던져(다이빙) 공을 잡는 동작을 기초부터 연습한다. 안전하게 쓰러지는 법부터 시작한다.', setsReps: '4세트 × 6회', weeklyReps: 2, minutes: 15, players: '2인', equipment: '매트·공 5개' },
+  { id: 'drs_gk_03', category: 'gk', scope: 'solo', weakTag: 'gk', positions: ['GK'], name: 'GK 풋워크 사다리', desc: '어질리티 사다리 칸을 골키퍼 자세로 빠르게 밟고 지나간다. 골문 앞에서 움직이는 발놀림을 기른다.', setsReps: '4세트 × 사다리 1왕복', weeklyReps: 2, minutes: 10, players: '혼자', equipment: '어질리티 사다리' },
 ];
 
 export function normalizeDrill(d) {
   const now = new Date().toISOString();
   const minutes = Math.round(Number(d?.minutes));
+  const weeklyReps = Math.round(Number(d?.weeklyReps));
   return {
     id: d?.id || uid('dr'),
     category: DRILL_CATEGORY_KEYS.includes(d?.category) ? d.category : 'pass',
+    scope: d?.scope === 'solo' ? 'solo' : 'team',   // S6: team(팀 훈련) | solo(개인 훈련)
     name: String(d?.name ?? '').trim().slice(0, 40),
-    desc: String(d?.desc ?? '').trim().slice(0, 200),
+    desc: String(d?.desc ?? '').trim().slice(0, 220),
     minutes: Number.isFinite(minutes) && minutes > 0 ? Math.min(120, minutes) : 15,
+    setsReps: String(d?.setsReps ?? '').trim().slice(0, 40),          // S6: "3세트 × 20회" 같은 표기
+    weeklyReps: Number.isFinite(weeklyReps) && weeklyReps > 0 ? Math.min(14, weeklyReps) : null,   // S6: 주 권장 횟수
     players: String(d?.players ?? '').trim().slice(0, 30),
     equipment: String(d?.equipment ?? '').trim().slice(0, 60),
+    positions: Array.isArray(d?.positions) ? d.positions.filter((p) => ['FW', 'MF', 'DF', 'GK'].includes(p)) : [],   // S6: 빈 배열=전체 포지션
+    weakTag: WEAK_TAGS.includes(d?.weakTag) ? d.weakTag : '',   // S6: 개인 드릴만 채운다(팀 드릴은 '')
     hidden: !!d?.hidden,
     createdAt: d?.createdAt || now,
     updatedAt: d?.updatedAt || now,
   };
 }
+
+/** 저장된 드릴 목록에 기본 드릴 중 아직 없는 것만 더한다 — 처음이면 팀 15개+개인 21개를 전부 시딩한다.
+ * (S6: 개인 드릴 21개를 나중에 추가했으므로, 이미 팀 15개만 있던 옛 저장본에도 빠진 것만 채워 넣는다.
+ *  기존 드릴의 id 는 절대 건드리지 않아 세션·과제의 drillId 참조가 깨지지 않는다 — 데이터 손실 0.) */
+export function seedDrills(list) {
+  const existing = Array.isArray(list) ? list.map(normalizeDrill) : [];
+  const ALL_DEFAULTS = [...DEFAULT_DRILLS, ...DEFAULT_SOLO_DRILLS];
+  if (!existing.length) return ALL_DEFAULTS.map(normalizeDrill);
+  const have = new Set(existing.map((d) => d.id));
+  const merged = existing.slice();
+  for (const def of ALL_DEFAULTS) if (!have.has(def.id)) merged.push(normalizeDrill(def));
+  return merged;
+}
+
+/* ---------------- 전술 플레이북 (S6, 2026-09-29 심야) ----------------
+ * 사장님 피드백 "기본 전술은 내가 넣어야 되는 구조야?" — 미리 15개가 들어 있고, 고르고 고치는 구조로 바꾼다.
+ * 내장 15개(BUILTIN_PLAYBOOKS, 아래)는 코드 상수다 — 절대 직접 수정되지 않는다(불변). 사장님이
+ * "불러오기"로 보드에 적용한 뒤 손으로 고치고 "내 전술로 저장"하면, 이 normalizePlaybook 을 거쳐
+ * 새 id 로 state.playbooks(사용자 플레이북)에 들어간다 — 내장 원본은 그대로 남는다("수정 시 복사본").
+ * 좌표계는 BoardSnapshot(§4)과 같다 — x·y 0~100%, 우리는 아래 절반(50~100). 세트피스 완성형(공격 A/B·
+ * 킥오프)은 예외적으로 우리 선수 대부분이 상대 박스(0~20%) 안에 있다 — 실제 세트피스 장면이라 그렇다.
+ * ourPins/oppPins 는 특정 선수(memberId)를 담지 않는다 — 좌표+gk/pos 뿐이라 어느 라인업에도 다시 쓸 수 있다.
+ * 보드에 적용할 때는 지금 배치된 선수를 자리 순서(index)대로 새 좌표에 옮겨 얹는다(app.js applyPlaybookToBoard).
+ */
+export function normalizePlaybook(x) {
+  const now = new Date().toISOString();
+  const formation = FORMATION_PRESETS.includes(x?.formation) ? x.formation : FORMATION_PRESETS[0];
+  const oppFormation = FORMATION_PRESETS.includes(x?.oppFormation) ? x.oppFormation : formation;
+  const need = formationSlots(formation).length;
+  const oppNeed = formationSlots(oppFormation).length;
+  const clamp = (v, d = 50) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : d; };
+  const ourRaw = Array.isArray(x?.ourPins) ? x.ourPins : [];
+  const ourPins = [];
+  for (let i = 0; i < need; i += 1) {
+    const p = ourRaw[i];
+    ourPins.push({ x: clamp(p?.x, 50), y: clamp(p?.y, i === 0 ? 94 : 70), gk: i === 0 });
+  }
+  const oppRaw = Array.isArray(x?.oppPins) ? x.oppPins : [];
+  const oppLabels = formationSlots(oppFormation);
+  const oppPins = [];
+  for (let i = 0; i < oppNeed; i += 1) {
+    const p = oppRaw[i];
+    oppPins.push({ x: clamp(p?.x, 50), y: clamp(p?.y, 30), pos: typeof p?.pos === 'string' && p.pos ? p.pos : (oppLabels[i] || 'MF') });
+  }
+  const arrows = (Array.isArray(x?.arrows) ? x.arrows : []).slice(0, 20).map((a) => ({
+    x1: clamp(a?.x1, 0), y1: clamp(a?.y1, 0), x2: clamp(a?.x2, 0), y2: clamp(a?.y2, 0),
+    style: a?.style === 'dashed' ? 'dashed' : 'solid',
+  }));
+  const ball = x?.ball && Number.isFinite(Number(x.ball.x)) && Number.isFinite(Number(x.ball.y))
+    ? { x: clamp(x.ball.x), y: clamp(x.ball.y) } : null;
+  return {
+    id: x?.id || uid('pb'),
+    name: String(x?.name ?? '').trim().slice(0, 40) || '이름 없는 전술',
+    formation, oppFormation,
+    ourPins, oppPins, arrows, ball,
+    note: String(x?.note ?? '').trim().slice(0, 220),
+    kind: typeof x?.kind === 'string' ? x.kind.slice(0, 20) : '',
+    builtin: !!x?.builtin,
+    createdAt: x?.createdAt || now,
+    updatedAt: x?.updatedAt || now,
+  };
+}
+
+/** 기본 배치(layoutFormation)에서 몇 자리만 손봐 만드는 helper — BUILTIN_PLAYBOOKS 작성 전용 */
+function pbOurPinsCustom(formation, overrides = {}) {
+  const base = layoutFormation(formation, 'us').map((p, i) => ({ x: p.x, y: p.y, gk: i === 0 }));
+  return base.map((p, i) => (overrides[i] ? { ...p, ...overrides[i] } : p));
+}
+function pbOppPinsCustom(formation, overrides = {}) {
+  const base = buildOppPins(formation);
+  return base.map((p, i) => (overrides[i] ? { ...p, ...overrides[i] } : p));
+}
+/** 라인 전체 높이를 밀어 올리거나(음수) 내리는(양수) helper — GK(idx 0)는 그대로 둔다 */
+function pbShiftLines(pins, dy) {
+  return pins.map((p, i) => (i === 0 ? p : { ...p, y: Math.max(40, Math.min(96, Math.round(p.y + dy))) }));
+}
+
+/** 기본 전술 15개 = 포메이션 변형 10개(5개 포메이션 × 대표 2개) + 세트피스 완성형 5개.
+ * "한 문장 한 가지" 원칙 — note 는 초보 감독이 읽고 바로 이해할 수 있는 한 문장(전문용어는 괄호 설명). */
+export const BUILTIN_PLAYBOOKS = [
+  // ---- 4-4-2 ----
+  {
+    id: 'pb_442_low', builtin: true, name: '4-4-2 낮은 블록 수비', kind: 'defense',
+    formation: '4-4-2', oppFormation: '4-4-2',
+    ourPins: pbShiftLines(pbOurPinsCustom('4-4-2'), 6), oppPins: pbOppPinsCustom('4-4-2'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['drop-line'].arrows.map((a) => ({ ...a })),
+    note: '우리 진영 깊숙이 내려와 촘촘하게 지키다가, 공을 뺏으면 빠르게 앞으로 찔러줍니다.',
+  },
+  {
+    id: 'pb_442_press', builtin: true, name: '4-4-2 전방 압박 시작', kind: 'press',
+    formation: '4-4-2', oppFormation: '4-4-2',
+    ourPins: pbShiftLines(pbOurPinsCustom('4-4-2'), -9), oppPins: pbOppPinsCustom('4-4-2'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['press-up'].arrows.map((a) => ({ ...a })),
+    note: '상대 골키퍼가 공을 잡자마자 최전방부터 달려들어 압박합니다(압박: 공을 가진 상대를 바짝 쫓아가 빼앗으려는 움직임).',
+  },
+  // ---- 4-3-3 ----
+  {
+    id: 'pb_433_buildup', builtin: true, name: '4-3-3 후방 빌드업', kind: 'buildup',
+    formation: '4-3-3', oppFormation: '4-4-2',
+    ourPins: pbOurPinsCustom('4-3-3'), oppPins: pbOppPinsCustom('4-4-2'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['build-up'].arrows.map((a) => ({ ...a })),
+    note: '골키퍼와 센터백이 짧은 패스를 주고받으며 안전하게 공을 앞으로 옮깁니다(빌드업: 뒤에서부터 차근차근 공격을 만들어가는 과정).',
+  },
+  {
+    id: 'pb_433_highline', builtin: true, name: '4-3-3 하이라인 압박', kind: 'press',
+    formation: '4-3-3', oppFormation: '4-4-2',
+    ourPins: pbShiftLines(pbOurPinsCustom('4-3-3'), -11), oppPins: pbOppPinsCustom('4-4-2'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['press-up'].arrows.map((a) => ({ ...a })),
+    note: '수비 라인을 하프라인 가까이 끌어올려 상대 진영을 좁게 만듭니다(하이라인: 수비 줄을 평소보다 앞으로 당겨 세우는 것).',
+  },
+  // ---- 4-2-3-1 ----
+  {
+    id: 'pb_4231_mid', builtin: true, name: '4-2-3-1 중간 블록 수비', kind: 'defense',
+    formation: '4-2-3-1', oppFormation: '4-3-3',
+    ourPins: pbShiftLines(pbOurPinsCustom('4-2-3-1'), 3), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['narrow-defense'].arrows.map((a) => ({ ...a })),
+    note: '너무 낮지도 높지도 않은 중간에서 진을 치고 상대 패스 길목을 막습니다.',
+  },
+  {
+    id: 'pb_4231_wide', builtin: true, name: '4-2-3-1 측면 빌드업 전개', kind: 'buildup',
+    formation: '4-2-3-1', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-2-3-1'), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['switch-flank'].arrows.map((a) => ({ ...a })),
+    note: '풀백에게 공을 주고 측면 공간을 넓게 쓰며 공격을 풀어갑니다(풀백: 좌우 수비 자리).',
+  },
+  // ---- 3-5-2 ----
+  {
+    id: 'pb_352_sweep', builtin: true, name: '3-5-2 스위퍼 라인 수비', kind: 'defense',
+    formation: '3-5-2', oppFormation: '4-3-3',
+    ourPins: pbShiftLines(pbOurPinsCustom('3-5-2'), 5), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['drop-line'].arrows.map((a) => ({ ...a })),
+    note: '수비수 세 명 중 한 명이 살짝 뒤에서 커버하며 뒷공간을 지웁니다(커버: 동료 뒤를 받쳐주는 움직임).',
+  },
+  {
+    id: 'pb_352_midpress', builtin: true, name: '3-5-2 중원 압박', kind: 'press',
+    formation: '3-5-2', oppFormation: '4-3-3',
+    ourPins: pbShiftLines(pbOurPinsCustom('3-5-2'), -7), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['press-up'].arrows.map((a) => ({ ...a })),
+    note: '중원 다섯 명이 좁게 붙어 상대의 가운데 통로를 막고 압박합니다.',
+  },
+  // ---- 5-3-2 ----
+  {
+    id: 'pb_532_dense', builtin: true, name: '5-3-2 밀집 수비', kind: 'defense',
+    formation: '5-3-2', oppFormation: '4-3-3',
+    ourPins: pbShiftLines(pbOurPinsCustom('5-3-2'), 9), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS['narrow-defense'].arrows.map((a) => ({ ...a })),
+    note: '다섯 명이 한 줄로 내려와 페널티박스 앞을 두껍게 막습니다.',
+  },
+  {
+    id: 'pb_532_longball', builtin: true, name: '5-3-2 롱볼 직결 빌드업', kind: 'buildup',
+    formation: '5-3-2', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('5-3-2'), oppPins: pbOppPinsCustom('4-3-3'), ball: null,
+    arrows: QUICK_INSTRUCTION_PRESETS.counter.arrows.map((a) => ({ ...a })),
+    note: '뒤에서 길게 걷어차 최전방 두 명에게 바로 연결하는 단순한 방법입니다(롱볼: 길게 차서 상대 진영으로 바로 보내는 패스).',
+  },
+  // ---- 세트피스 완성형(선수 배치까지 포함) ----
+  {
+    id: 'pb_setpiece_corner_a', builtin: true, name: '코너킥 공격 A (니어·파포스트 크라우드)', kind: 'setpiece',
+    formation: '4-3-3', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-3-3', {
+      1: { x: 6, y: 7 }, 2: { x: 40, y: 8 }, 3: { x: 60, y: 6 }, 4: { x: 50, y: 9 },
+      5: { x: 45, y: 15 }, 6: { x: 55, y: 16 }, 7: { x: 50, y: 22 }, 8: { x: 66, y: 14 },
+      9: { x: 35, y: 48 }, 10: { x: 65, y: 48 },
+    }),
+    oppPins: pbOppPinsCustom('4-3-3'),
+    ball: { ...SET_PIECE_TEMPLATES['corner-left'].ball },
+    arrows: [
+      { x1: 40, y1: 30, x2: 40, y2: 8, style: 'solid' },
+      { x1: 60, y1: 28, x2: 60, y2: 6, style: 'solid' },
+      { x1: 50, y1: 35, x2: 50, y2: 22, style: 'dashed' },
+    ],
+    note: '니어포스트(가까운 골대 기둥)와 파포스트(먼 골대 기둥)에 동시에 선수를 보내 상대 수비를 흔듭니다.',
+  },
+  {
+    id: 'pb_setpiece_corner_b', builtin: true, name: '코너킥 공격 B (숏코너 조합)', kind: 'setpiece',
+    formation: '4-3-3', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-3-3', {
+      1: { x: 94, y: 7 }, 2: { x: 84, y: 10 }, 3: { x: 40, y: 6 }, 4: { x: 60, y: 8 },
+      5: { x: 50, y: 20 }, 6: { x: 50, y: 9 }, 7: { x: 56, y: 15 }, 8: { x: 34, y: 14 },
+      9: { x: 35, y: 48 }, 10: { x: 65, y: 48 },
+    }),
+    oppPins: pbOppPinsCustom('4-3-3'),
+    ball: { ...SET_PIECE_TEMPLATES['corner-right'].ball },
+    arrows: [
+      { x1: 94, y1: 7, x2: 84, y2: 10, style: 'dashed' },
+      { x1: 84, y1: 10, x2: 50, y2: 9, style: 'solid' },
+    ],
+    note: '짧게 주고받아 각도를 만든 뒤 크로스를 올리는 방법입니다(숏코너: 코너 근처에서 짧게 패스하는 방식).',
+  },
+  {
+    id: 'pb_setpiece_corner_def', builtin: true, name: '코너킥 수비 (지역+대인 혼합)', kind: 'setpiece',
+    formation: '4-3-3', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-3-3', {
+      0: { x: 50, y: 96 }, 1: { x: 42, y: 90 }, 2: { x: 58, y: 90 }, 3: { x: 35, y: 88 },
+      4: { x: 50, y: 88 }, 5: { x: 65, y: 88 }, 6: { x: 46, y: 82 }, 7: { x: 54, y: 82 },
+      8: { x: 50, y: 76 }, 9: { x: 25, y: 60 }, 10: { x: 75, y: 60 },
+    }),
+    oppPins: pbOppPinsCustom('4-3-3', {
+      5: { x: 45, y: 78 }, 6: { x: 55, y: 78 }, 8: { x: 40, y: 90 }, 9: { x: 50, y: 90 }, 10: { x: 60, y: 90 },
+    }),
+    ball: { x: 97, y: 96 },
+    arrows: [],
+    note: '여섯 야드 박스 앞은 지역으로 막고, 위험한 상대 선수는 한 명씩 붙어서 맨투맨으로 따라다닙니다(지역 수비+대인 수비 혼합).',
+  },
+  {
+    id: 'pb_setpiece_freekick', builtin: true, name: '프리킥 공격 (박스 앞 직접 프리킥)', kind: 'setpiece',
+    formation: '4-3-3', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-3-3', {
+      1: { x: 50, y: 34 }, 2: { x: 44, y: 34 }, 3: { x: 60, y: 8 }, 4: { x: 42, y: 8 },
+      5: { x: 50, y: 10 }, 6: { x: 50, y: 22 }, 7: { x: 47, y: 16 }, 8: { x: 56, y: 18 },
+      9: { x: 35, y: 48 }, 10: { x: 65, y: 48 },
+    }),
+    oppPins: pbOppPinsCustom('4-3-3'),
+    ball: { ...SET_PIECE_TEMPLATES.freekick.ball },
+    arrows: [
+      { x1: 50, y1: 34, x2: 50, y2: 2, style: 'dashed' },
+      { x1: 42, y1: 26, x2: 42, y2: 8, style: 'solid' },
+      { x1: 60, y1: 26, x2: 60, y2: 6, style: 'solid' },
+    ],
+    note: '박스 앞 프리킥은 벽을 넘겨 직접 노리거나, 골대 앞으로 넘겨 마무리 슈팅을 노립니다.',
+  },
+  {
+    id: 'pb_setpiece_kickoff', builtin: true, name: '킥오프 패턴', kind: 'setpiece',
+    formation: '4-3-3', oppFormation: '4-3-3',
+    ourPins: pbOurPinsCustom('4-3-3', { 1: { x: 47, y: 52 }, 2: { x: 53, y: 54 } }),
+    oppPins: pbOppPinsCustom('4-3-3'),
+    ball: { ...SET_PIECE_TEMPLATES.kickoff.ball },
+    arrows: [
+      { x1: 47, y1: 52, x2: 53, y2: 54, style: 'solid' },
+      { x1: 53, y1: 54, x2: 53, y2: 70, style: 'dashed' },
+    ],
+    note: '센터서클에서 짧게 옆 동료에게 주고, 그 선수가 다시 뒤로 돌려 안전하게 경기를 시작합니다.',
+  },
+].map(normalizePlaybook);
 
 /* ---------------- 훈련 — 팀 훈련 세션 (S5, 2026-09-29) ---------------- */
 export function normalizeTrainingDrillRef(x) {
@@ -656,26 +936,30 @@ export function weakestAbilities(member, n = 2) {
   if (!rated.length) return [];
   return [...rated].sort((a, b) => a.val - b.val).slice(0, n).map((x) => x.key);
 }
-/** 간단 체크 항목 → 드릴 카테고리 (규칙 기반 매핑) */
+/** 간단 체크 항목(+gk) → 드릴 카테고리 — S6부터는 "후순위" 매핑이다.
+ * 먼저 개인 드릴(scope:'solo')을 weakTag 로 직접 찾고, 없을 때만(숨겨졌거나 미등록) 이 카테고리로 팀 드릴을 대신 찾는다. */
 export const ABIL_DRILL_CATEGORY = {
-  speed: 'fitness', stamina: 'fitness', basic: 'pass', shoot: 'setpiece', defense: 'press', physical: 'transition',
+  speed: 'fitness', stamina: 'fitness', basic: 'pass', shoot: 'setpiece', defense: 'press', physical: 'transition', gk: 'gk',
 };
 /**
  * 이번 주 과제 규칙 기반 추천 (AI 아님) — 저장하지 않고 과제 배열만 돌려준다.
- *  - 약점 2항목(weakestAbilities) → 매핑된 카테고리에서 드릴 1개씩
- *  - GK 회원이면 GK 카테고리 드릴을 우선 하나 포함
+ *  - 약점 2항목(weakestAbilities, 미평가면 기본 stamina·basic) → 각 태그로 **개인 드릴(solo)을 먼저** 찾는다(S6, 2026-09-29 심야)
+ *  - 그 태그의 개인 드릴이 없으면(숨김·미등록) 팀 드릴을 카테고리 매핑(ABIL_DRILL_CATEGORY)으로 후순위 대체
+ *  - GK 회원이면 'gk' 태그를 맨 앞에 붙인다(개인 GK 드릴 우선, 없으면 팀 GK 드릴)
  *  - shuttle20/run1500 기록이 있으면 재측정 목표(현재 기록보다 살짝 빠른 값)를 과제로 추가
  */
 export function recommendTasksFor(member, drills) {
   const weak = weakestAbilities(member, 2);
   const isGk = !!(member?.gk || member?.pos === 'GK');
-  const cats = weak.length ? weak.map((k) => ABIL_DRILL_CATEGORY[k]) : ['fitness', 'pass'];
-  if (isGk) cats.unshift('gk');
+  const tags = weak.length ? [...weak] : ['stamina', 'basic'];
+  if (isGk) tags.unshift('gk');
   const tasks = [];
   const used = new Set();
-  for (const cat of cats) {
-    const pool = (drills || []).filter((d) => !d.hidden && d.category === cat && !used.has(d.id));
-    const pick = pool[0];
+  for (const tag of tags) {
+    const pool = drills || [];
+    // 개인 드릴 우선 (weakTag 직접 매칭) — 팀 드릴은 없을 때만 후순위로 쓴다
+    const soloPick = pool.find((d) => !d.hidden && d.scope === 'solo' && d.weakTag === tag && !used.has(d.id));
+    const pick = soloPick || pool.find((d) => !d.hidden && d.category === ABIL_DRILL_CATEGORY[tag] && !used.has(d.id));
     if (pick) { used.add(pick.id); tasks.push(normalizePersonalTask({ drillId: pick.id })); }
   }
   for (const t of TESTS) {
@@ -703,9 +987,10 @@ export function emptyState() {
     matches: [],
     opponents: [],   // 상대 클럽 카드 (S2에서 채운다 — v1.0은 자리만)
     tactics: [],
-    drills: DEFAULT_DRILLS.map(normalizeDrill),   // 드릴 라이브러리 (S5) — 초기 15개
+    drills: seedDrills([]),   // 드릴 라이브러리 — 팀 15개 + 개인 21개(S6)
     trainingSessions: [],   // 팀 훈련 세션 (S5)
     personalPlans: [],      // 개인 훈련 과제 (S5)
+    playbooks: [],           // 사용자 저장 전술 플레이북 (S6) — 내장 15개는 BUILTIN_PLAYBOOKS(코드 상수)로 따로 있다
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1043,10 +1328,13 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     s.opponents = Array.isArray(raw?.opponents) ? raw.opponents.map(normalizeOpponent) : [];
     for (const o of s.opponents) o.record = computeRecordFor(s.matches, o.id);
     s.tactics = Array.isArray(s.tactics) ? s.tactics : [];
-    // S5: 드릴은 한 번만 시딩한다 — 이미 저장된 목록(추가·수정·숨김 포함)이 있으면 그걸 쓴다
-    s.drills = Array.isArray(s.drills) && s.drills.length ? s.drills.map(normalizeDrill) : DEFAULT_DRILLS.map(normalizeDrill);
+    // S5/S6: 드릴은 있는 것을 그대로 쓰고(추가·수정·숨김 보존), 기본 목록 중 아직 없는 것만 더한다
+    // (S6: 개인 드릴 21개를 나중에 추가했으므로, 팀 15개만 있던 옛 저장본에도 빠진 것만 채운다 — 데이터 손실 0)
+    s.drills = seedDrills(s.drills);
     s.trainingSessions = Array.isArray(raw?.trainingSessions) ? raw.trainingSessions.map(normalizeTrainingSession) : [];
     s.personalPlans = Array.isArray(raw?.personalPlans) ? raw.personalPlans.map(normalizePersonalPlan).filter((p) => p.memberId) : [];
+    // S6: 사용자 저장 전술 플레이북 — 내장(BUILTIN_PLAYBOOKS)은 코드 상수라 여기서 다루지 않는다
+    s.playbooks = Array.isArray(raw?.playbooks) ? raw.playbooks.map(normalizePlaybook).filter((p) => p.name) : [];
     return s;
   }
 
@@ -1512,6 +1800,8 @@ export function createStore(adapter = new LocalStorageAdapter()) {
         return state.drills[i];
       },
       setHidden(id, hidden) { return api.drills.update(id, { hidden: !!hidden }); },
+      /** S6: 개인 드릴만, 약점 태그로 필터(추천 로직과 별개로 화면에서 직접 훑어볼 때 쓴다) */
+      bySoloTag(tag) { return api.drills.visible().filter((d) => d.scope === 'solo' && d.weakTag === tag); },
     },
 
     /* 팀 훈련 세션 (S5) */
@@ -1616,6 +1906,30 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       },
       remove(id) {
         state.tactics = state.tactics.filter((t) => t.id !== id);
+        touch();
+      },
+    },
+
+    /* 전술 플레이북 (S6) — 내장 15개(BUILTIN_PLAYBOOKS)는 코드 상수라 여기 포함되지 않는다.
+     * 화면에서 "불러오기" 목록은 [...BUILTIN_PLAYBOOKS, ...store.playbooks.all()] 로 합쳐서 보여준다. */
+    playbooks: {
+      all() { return state.playbooks; },
+      byId(id) { return state.playbooks.find((p) => p.id === id) || null; },
+      add(data) {
+        const p = normalizePlaybook({ ...data, id: undefined, builtin: false });
+        state.playbooks.push(p);
+        touch();
+        return p;
+      },
+      update(id, patch) {
+        const i = state.playbooks.findIndex((p) => p.id === id);
+        if (i < 0) return null;
+        state.playbooks[i] = normalizePlaybook(Object.assign({}, state.playbooks[i], patch, { id, builtin: false, updatedAt: new Date().toISOString() }));
+        touch();
+        return state.playbooks[i];
+      },
+      remove(id) {
+        state.playbooks = state.playbooks.filter((p) => p.id !== id);
         touch();
       },
     },
@@ -1850,12 +2164,22 @@ export function createStore(adapter = new LocalStorageAdapter()) {
           });
         }
 
+        // S6: 사용자 저장 전술 플레이북 — id 로 합친다(내장 15개는 코드 상수라 백업에 실리지 않는다).
+        // memberId 를 담지 않는 스키마라 다시 이을 참조가 없다 — 처음 보는 id 만 그대로 추가.
+        const pbIds = new Set(state.playbooks.map((p) => p.id));
+        for (const inc of next.playbooks) {
+          if (pbIds.has(inc.id)) continue;
+          state.playbooks.push({ ...inc });
+          pbIds.add(inc.id);
+        }
+
         syncOpponentRecords();   // 새로 들어온/이어붙은 경기 기록으로 전적을 다시 센다
       }
       await adapter.save(state);
       emit();
       return { members: state.members.length, matches: state.matches.length, opponents: state.opponents.length,
-        drills: state.drills.length, trainingSessions: state.trainingSessions.length, personalPlans: state.personalPlans.length, ...stat };
+        drills: state.drills.length, trainingSessions: state.trainingSessions.length, personalPlans: state.personalPlans.length,
+        playbooks: state.playbooks.length, ...stat };
     },
 
     /**

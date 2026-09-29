@@ -23,14 +23,14 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   RUBRIC_GENDERS, rubricKeyFor, TESTS, testForAbil, parseTestInput, formatTestValue,
   localDateStr, FORMATION_PRESETS, formationSlots,
   layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES, QUICK_INSTRUCTION_PRESETS,
-  DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, trainingSessionDrillMinutes,
-  currentWeekMonday, weekLabel, weakestAbilities } = STORE_NS;
+  DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, WEAK_TAGS, trainingSessionDrillMinutes,
+  currentWeekMonday, weekLabel, weakestAbilities, BUILTIN_PLAYBOOKS } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 
-export const APP_VERSION = 'v1.1.0';
+export const APP_VERSION = 'v1.1.1';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -47,6 +47,7 @@ const ui = {
   rosterDone: null,      // 명단 적용 결과 배너
   legacyHidden: false,   // v1.0 업데이트 안내를 이 화면에서 닫았나
   trainSub: 'team',      // 훈련 탭 하위 — 'team' | 'personal' (S5)
+  drillLibScope: 'all',  // 드릴 라이브러리 필터 — 'all' | 'team' | 'solo' (S6)
 };
 
 /* ================= 유틸 ================= */
@@ -236,6 +237,16 @@ function toast(msg, kind = '') {
   wrap.innerHTML = `<div class="toast ${kind}">${esc(msg)}</div>`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { wrap.innerHTML = ''; }, 2200);
+}
+/** "되돌리기" 버튼이 달린 토스트 — 5초간 떠 있다가 사라진다. 삭제류 동작(회원 삭제 등)에 쓴다 */
+function toastUndo(msg, onUndo) {
+  const wrap = $('#toasts');
+  wrap.innerHTML = `<div class="toast toast-undo">${esc(msg)} <button type="button" class="toast-undo-btn" id="toast-undo-btn">되돌리기</button></div>`;
+  clearTimeout(toastTimer);
+  const btn = $('#toast-undo-btn', wrap);
+  const finish = () => { wrap.innerHTML = ''; };
+  btn.addEventListener('click', () => { clearTimeout(toastTimer); finish(); onUndo(); });
+  toastTimer = setTimeout(finish, 5000);
 }
 
 /* 모달: 뒤로가기로 닫힘 */
@@ -1009,6 +1020,42 @@ function resetBoardLayout() {
   bd.arrows = []; bd.ball = null; bd.setPiece = null; bd.dirty = true;
 }
 
+/** 전체 전술 목록(불러오기 화면용) — 내장 15개(코드 상수, 항상 앞) + 사용자가 저장한 것(최근 것 먼저) */
+function allPlaybooks() {
+  return [...BUILTIN_PLAYBOOKS, ...store.playbooks.all().slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))];
+}
+
+/** 플레이북 "불러오기 → 보드에 적용" — 좌표·화살표·공은 플레이북 것을 쓰고, 지금 배치된 선수는
+ * 자리 순서(index)대로 새 좌표에 그대로 옮겨 얹는다(포메이션 슬롯 수가 다르면 넘치는 자리는 공석).
+ * 내장이든 사용자 것이든 항상 깊은 복사해서 쓴다 — 원본(BUILTIN_PLAYBOOKS)은 절대 손대지 않는다. */
+function applyPlaybookToBoard(pb) {
+  const oldOur = bd.ourPins.map((p) => ({ memberId: p.memberId, name: p.name }));
+  bd.formation = pb.formation;
+  bd.oppFormation = pb.oppFormation;
+  bd.ourPins = pb.ourPins.map((p, i) => {
+    const old = oldOur[i];
+    return { x: p.x, y: p.y, gk: p.gk, memberId: old?.memberId || null, name: old?.memberId ? old.name : '' };
+  });
+  bd.oppPins = pb.oppPins.map((p) => ({ ...p }));
+  bd.arrows = pb.arrows.map((a) => ({ ...a }));
+  bd.ball = pb.ball ? { ...pb.ball } : null;
+  bd.setPiece = null;
+  bd.dirty = true;
+}
+
+/** "내 전술로 저장" — 지금 보드 배치(좌표·화살표·공)를 그대로 사용자 플레이북으로 저장한다.
+ * 특정 선수(memberId)는 담지 않는다 — 어느 경기·어느 라인업에도 다시 쓸 수 있어야 하기 때문 */
+function savePlaybookFromBoard(name, note) {
+  return store.playbooks.add({
+    name, note,
+    formation: bd.formation, oppFormation: bd.oppFormation,
+    ourPins: bd.ourPins.map((p) => ({ x: p.x, y: p.y, gk: p.gk })),
+    oppPins: bd.oppPins.map((p) => ({ x: p.x, y: p.y, pos: p.pos })),
+    arrows: bd.arrows.map((a) => ({ ...a })),
+    ball: bd.ball ? { ...bd.ball } : null,
+  });
+}
+
 function candidateList() {
   const today = availableToday();
   return today.length ? today : store.members.active();
@@ -1170,6 +1217,10 @@ function renderBoardPrep(root, matches) {
         <div class="row" style="margin-bottom:8px">
           <select id="bd-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.formation === f ? 'selected' : ''}>우리 ${f}</option>`).join('')}</select>
           <select id="bd-opp-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.oppFormation === f ? 'selected' : ''}>상대 ${f}</option>`).join('')}</select>
+        </div>
+        <div class="row" style="margin-bottom:10px;gap:8px">
+          <button type="button" class="btn grow" id="bd-playbook-open">기본 전술 불러오기</button>
+          <button type="button" class="btn grow ghost" id="bd-playbook-save">내 전술로 저장</button>
         </div>
         <div class="pitch-wrap" id="bd-pitch">
           ${boardPitchSVG()}
@@ -1546,6 +1597,94 @@ async function exportBoardPNG() {
 
   const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
   await shareOrDownload(new File([blob], `축구joy_전술보드_${todayStr()}.png`, { type: 'image/png' }), blob);
+}
+
+/* ---------- 전술 플레이북 (S6, 2026-09-29 심야) ----------
+ * "기본 전술은 내가 넣어야 되는 구조야?" 사장님 피드백 — 15개가 미리 들어 있고, 고르고 고치는 구조.
+ */
+const PLAYBOOK_KIND_LABEL = { defense: '수비', press: '압박', buildup: '빌드업', setpiece: '세트피스' };
+
+function playbookRowHTML(pb) {
+  return `<div class="pb-row">
+    <div class="pb-top">
+      <b>${esc(pb.name)}</b>
+      <span class="chip">${esc(pb.formation)}</span>
+      ${pb.kind ? `<span class="catchip">${esc(PLAYBOOK_KIND_LABEL[pb.kind] || pb.kind)}</span>` : ''}
+      ${!pb.builtin ? '<span class="chip coach">내 전술</span>' : ''}
+    </div>
+    ${pb.note ? `<div class="pb-note">${esc(pb.note)}</div>` : ''}
+    <div class="row" style="margin-top:8px;gap:6px">
+      <button type="button" class="btn sm primary grow" data-pb-apply="${pb.id}">이 전술 적용</button>
+      ${!pb.builtin ? `<button type="button" class="btn sm danger" data-pb-del="${pb.id}" aria-label="전술 삭제">삭제</button>` : ''}
+    </div>
+  </div>`;
+}
+
+/** "기본 전술 불러오기" 시트 — 내 전술(사용자 저장분) 먼저, 기본 전술(내장 15개) 그다음 */
+function playbookLibrarySheet() {
+  const userList = store.playbooks.all().slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const builtinList = BUILTIN_PLAYBOOKS;
+  openModal(`
+    <h3>기본 전술 불러오기</h3>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">불러오면 지금 보드에 바로 적용됩니다. 적용한 뒤 손으로 고치고 "내 전술로 저장"을 누르면 여기 "내 전술"에 새로 쌓입니다.</div>
+    ${userList.length ? `<div class="section-title" style="margin-top:0">내 전술 <span class="count">${userList.length}</span></div>
+      <div class="pb-list">${userList.map(playbookRowHTML).join('')}</div>` : ''}
+    <div class="section-title" style="margin-top:${userList.length ? '14px' : '0'}">기본 전술 <span class="count">${builtinList.length}</span></div>
+    <div class="pb-list">${builtinList.map(playbookRowHTML).join('')}</div>
+    <div class="foot"><button class="btn primary" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') return closeModal();
+      const apply = e.target.closest('[data-pb-apply]');
+      if (apply) {
+        const pb = allPlaybooks().find((p) => p.id === apply.dataset.pbApply);
+        if (!pb) return;
+        applyPlaybookToBoard(pb);
+        closeModal();
+        toast(`"${pb.name}" 적용했습니다`);
+        return renderBoard();
+      }
+      const del = e.target.closest('[data-pb-del]');
+      if (del) {
+        const pb = store.playbooks.byId(del.dataset.pbDel);
+        if (!pb) return;
+        closeModal();
+        if (await confirmDialog({ title: `"${pb.name}" 을(를) 삭제할까요?`, body: '기본 전술에는 영향이 없습니다.', ok: '삭제', danger: true })) {
+          store.playbooks.remove(pb.id);
+          toast('삭제했습니다');
+        }
+        return afterModalClose(() => playbookLibrarySheet());
+      }
+    });
+  });
+}
+
+/** "내 전술로 저장" — 지금 보드 배치를 이름 붙여 저장한다(선수 이름은 담지 않아 다음 경기에도 다시 쓸 수 있다) */
+function savePlaybookModal() {
+  openModal(`
+    <h3>내 전술로 저장</h3>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">지금 보드의 배치·화살표·공 위치를 전술로 저장합니다. 선수 이름은 담기지 않아 다음 경기에도 다시 쓸 수 있습니다.</div>
+    <div class="field"><label>전술 이름</label><input type="text" id="f-pb-name" placeholder="예: 우리 팀 낮은 블록" maxlength="40" autocomplete="off"></div>
+    <div class="field"><label>메모 (선택)</label><textarea id="f-pb-note" rows="2" maxlength="200" placeholder="한 줄 설명"></textarea></div>
+    <div class="foot">
+      <button class="btn ghost" data-act="cancel">취소</button>
+      <button class="btn primary" data-act="save">저장</button>
+    </div>`, (m) => {
+    setTimeout(() => $('#f-pb-name', m)?.focus(), 60);
+    m.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (!act) return;
+      if (act === 'cancel') return closeModal();
+      if (act === 'save') {
+        const name = $('#f-pb-name', m).value.trim();
+        if (!name) { toast('전술 이름을 입력해 주세요', 'err'); return; }
+        const note = $('#f-pb-note', m).value.trim();
+        savePlaybookFromBoard(name, note);
+        toast(`"${name}" 전술로 저장했습니다`);
+        closeModal();
+      }
+    });
+  });
 }
 
 /* ================= 상대팀 (S2) =================
@@ -2058,9 +2197,11 @@ function nameFixSheet() {
  * 마스터플랜 §7: 드릴 라이브러리(초기 15개, 삭제 없이 숨김만) + 팀 훈련 세션
  * (drills[]·attendees[]·notes) + 개인 훈련 과제(주 단위, 규칙 기반 추천·완료 체크·감독 확인).
  */
+/** S6: 팀 훈련 탭 하단 미리보기 — 팀 드릴만 센다(개인 드릴은 훈련 탭 → 개인 훈련에서 쓰인다) */
 function drillLibraryPreview() {
+  const teamDrills = store.drills.visible().filter((d) => d.scope === 'team');
   return `<div class="card flat" style="padding:12px 14px">
-    <div class="row wrap">${DRILL_CATEGORIES.map((c) => `<span class="catchip">${esc(c.label)} <b>${store.drills.byCategory(c.key).length}</b></span>`).join('')}</div>
+    <div class="row wrap">${DRILL_CATEGORIES.map((c) => `<span class="catchip">${esc(c.label)} <b>${teamDrills.filter((d) => d.category === c.key).length}</b></span>`).join('')}</div>
   </div>`;
 }
 
@@ -2087,7 +2228,8 @@ function renderTeamTrainList() {
     html += `<div class="section-title">훈련 일지 <span class="count">${list.length}</span></div>`;
     html += list.map(sessionRow).join('');
   }
-  html += `<div class="section-title" style="margin-top:18px">드릴 라이브러리 <span class="count">${store.drills.visible().length}</span>
+  const teamDrillCount = store.drills.visible().filter((d) => d.scope === 'team').length;
+  html += `<div class="section-title" style="margin-top:18px">드릴 라이브러리(팀) <span class="count">${teamDrillCount}</span>
     <button class="btn sm ghost right" id="btn-drill-lib">전체 관리</button></div>`;
   html += drillLibraryPreview();
   return html;
@@ -2107,7 +2249,7 @@ function trainingSessionModal(existing) {
   const activeMembers = store.members.active();
 
   const draw = () => {
-    const visibleDrills = store.drills.visible();
+    const visibleDrills = store.drills.visible().filter((d) => d.scope === 'team');   // S6: 팀 세션엔 팀 드릴만
     const sum = drills.reduce((s, d) => s + (Number(d.minutes) || 0), 0);
     return `
     <h3>${existing ? '훈련 세션 수정' : '새 훈련 세션'}</h3>
@@ -2138,7 +2280,7 @@ function trainingSessionModal(existing) {
 
     <div class="section-title" style="margin-top:14px">참가자 <span class="count">${attendees.size}</span>
       <button type="button" class="btn sm ghost right" id="btn-ts-att-all">오늘 가능 전원</button></div>
-    <div class="cand-list">${activeMembers.length ? activeMembers.map((m) => `<button type="button" class="cand-chip${attendees.has(m.id) ? ' placed' : ''}" data-ts-att="${m.id}">${esc(m.name)}${attendees.has(m.id) ? ' ✓' : ''}</button>`).join('') : '<div class="dim">활동 회원이 없습니다</div>'}</div>
+    <div class="cand-list">${activeMembers.length ? activeMembers.map((m) => `<button type="button" class="cand-chip${attendees.has(m.id) ? ' placed' : ''}" data-ts-att="${m.id}" aria-label="${attendees.has(m.id) ? `${esc(m.name)} 빼기` : `${esc(m.name)} 넣기`}">${esc(m.name)}${attendees.has(m.id) ? ' ✕' : ''}</button>`).join('') : '<div class="dim">활동 회원이 없습니다</div>'}</div>
 
     <div class="field" style="margin-top:12px"><label>메모 (선택 · 진행 후에 적어도 됩니다)</label><textarea id="f-ts-notes" rows="2" placeholder="진행 후 메모">${esc(notes)}</textarea></div>
     <div class="foot">
@@ -2203,28 +2345,52 @@ function trainingSessionModal(existing) {
   });
 }
 
+/** S6: 약점 태그(WEAK_TAGS) 한글 표기 — 간단 체크 6항목 라벨 + GK */
+const WEAK_TAG_LABEL = Object.fromEntries([...ABILITIES.map((a) => [a.key, a.label]), ['gk', 'GK']]);
+const POS_TAG_LABEL = { FW: '공격수', MF: '미드필더', DF: '수비수', GK: '골키퍼' };
+
 function drillRowHTML(d) {
   const cat = DRILL_CATEGORIES.find((c) => c.key === d.category);
   return `<div class="drill-row${d.hidden ? ' hidden' : ''}">
     <div class="dr-main">
-      <div class="dr-top"><span class="catchip">${esc(cat?.label || d.category)}</span><b>${esc(d.name)}</b>${d.hidden ? '<span class="chip">숨김</span>' : ''}</div>
+      <div class="dr-top">
+        <span class="catchip">${esc(cat?.label || d.category)}</span>
+        <span class="chip${d.scope === 'solo' ? ' coach' : ''}">${d.scope === 'solo' ? '개인' : '팀'}</span>
+        ${d.scope === 'solo' && d.weakTag ? `<span class="chip">${esc(WEAK_TAG_LABEL[d.weakTag] || d.weakTag)}</span>` : ''}
+        <b>${esc(d.name)}</b>${d.hidden ? '<span class="chip">숨김</span>' : ''}
+      </div>
       ${d.desc ? `<div class="dr-desc">${esc(d.desc)}</div>` : ''}
-      <div class="dr-meta"><span>${d.minutes}분</span>${d.players ? `<span>${esc(d.players)}</span>` : ''}${d.equipment ? `<span>${esc(d.equipment)}</span>` : ''}</div>
+      <div class="dr-meta">
+        ${d.setsReps ? `<span>${esc(d.setsReps)}</span>` : ''}<span>${d.minutes}분</span>
+        ${d.weeklyReps ? `<span>주 ${d.weeklyReps}회 권장</span>` : ''}
+        ${d.players ? `<span>${esc(d.players)}</span>` : ''}${d.equipment ? `<span>${esc(d.equipment)}</span>` : ''}
+        ${d.positions?.length ? `<span>${d.positions.map((p) => esc(POS_TAG_LABEL[p] || p)).join('·')}</span>` : ''}
+      </div>
     </div>
     <div class="dr-act"><button type="button" class="btn sm ghost" data-dr-edit="${d.id}">수정</button></div>
   </div>`;
 }
 
+/** S6: 드릴 라이브러리 — 전체/팀/개인 필터(ui.drillLibScope) */
 function drillLibraryModal() {
+  const scope = ui.drillLibScope || 'all';
   const list = store.drills.all().slice()
+    .filter((d) => scope === 'all' || d.scope === scope)
     .sort((a, b) => DRILL_CATEGORY_KEYS.indexOf(a.category) - DRILL_CATEGORY_KEYS.indexOf(b.category) || a.name.localeCompare(b.name, 'ko'));
   openModal(`
     <h3>드릴 라이브러리</h3>
-    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">숨긴 드릴도 이미 담긴 세션·과제에는 그대로 남습니다 — 지우기는 없습니다.</div>
+    <div style="font-size:12.5px;color:var(--text-2);margin-bottom:10px">숨긴 드릴도 이미 담긴 세션·과제에는 그대로 남습니다 — 지우기는 없습니다. 팀 드릴은 훈련 세션에, 개인 드릴은 개인 과제 추천에 쓰입니다.</div>
+    <div class="seg-wide" id="dr-lib-scope" style="margin-bottom:10px">
+      <button type="button" data-sc="all" aria-pressed="${scope === 'all'}">전체</button>
+      <button type="button" data-sc="team" aria-pressed="${scope === 'team'}">팀 드릴</button>
+      <button type="button" data-sc="solo" aria-pressed="${scope === 'solo'}">개인 드릴</button>
+    </div>
     <div class="row" style="margin-bottom:10px"><button type="button" class="btn primary grow" data-act="add">${ICON.plus} 드릴 추가</button></div>
-    <div class="drilllist">${list.map(drillRowHTML).join('')}</div>
+    <div class="drilllist">${list.length ? list.map(drillRowHTML).join('') : '<div class="dim" style="padding:16px">이 필터에 드릴이 없습니다.</div>'}</div>
     <div class="foot"><button class="btn primary" data-act="close">닫기</button></div>`, (m) => {
     m.addEventListener('click', (e) => {
+      const sc = e.target.closest('#dr-lib-scope [data-sc]');
+      if (sc) { ui.drillLibScope = sc.dataset.sc; closeModal(); return afterModalClose(() => drillLibraryModal()); }
       const edit = e.target.closest('[data-dr-edit]');
       if (edit) { closeModal(); return afterModalClose(() => drillFormModal(store.drills.byId(edit.dataset.drEdit))); }
       const act = e.target.closest('[data-act]')?.dataset.act;
@@ -2236,35 +2402,74 @@ function drillLibraryModal() {
 }
 
 function drillFormModal(existing) {
-  const d0 = existing || { category: 'pass', name: '', desc: '', minutes: 15, players: '', equipment: '' };
-  openModal(`
+  const d0 = existing || {
+    category: 'pass', scope: (ui.drillLibScope === 'solo' ? 'solo' : 'team'), name: '', desc: '', minutes: 15,
+    players: '', equipment: '', setsReps: '', weeklyReps: null, positions: [], weakTag: '',
+  };
+  let scope = d0.scope;
+  let positions = new Set(d0.positions || []);
+  const draw = () => `
     <h3>${existing ? '드릴 수정' : '드릴 추가'}</h3>
+    <div class="field"><label>구분</label>
+      <div class="seg-wide" id="f-dr-scope">
+        <button type="button" data-s="team" aria-pressed="${scope === 'team'}">팀 드릴</button>
+        <button type="button" data-s="solo" aria-pressed="${scope === 'solo'}">개인 드릴</button>
+      </div>
+    </div>
     <div class="field"><label>카테고리</label>
       <div class="seg-wide wrap" id="f-dr-cat">
         ${DRILL_CATEGORIES.map((c) => `<button type="button" data-c="${c.key}" aria-pressed="${d0.category === c.key}">${esc(c.label)}</button>`).join('')}
       </div>
     </div>
     <div class="field"><label>이름</label><input type="text" id="f-dr-name" value="${esc(d0.name)}" placeholder="예: 삼각패스 로테이션" maxlength="40"></div>
-    <div class="field"><label>설명 (2줄 정도)</label><textarea id="f-dr-desc" rows="3" maxlength="200" placeholder="어떻게 하는 드릴인지, 무엇을 기르는지">${esc(d0.desc)}</textarea></div>
+    <div class="field"><label>설명 (2줄 정도, 초보자도 알 수 있게)</label><textarea id="f-dr-desc" rows="3" maxlength="220" placeholder="어떻게 하는 드릴인지, 무엇을 기르는지">${esc(d0.desc)}</textarea></div>
+    ${scope === 'solo' ? `
+    <div class="field"><label>약점 태그 <span class="labelhint">개인 과제 추천이 이 태그로 먼저 찾습니다</span></label>
+      <div class="seg-wide wrap" id="f-dr-weaktag">
+        ${WEAK_TAGS.map((t) => `<button type="button" data-t="${t}" aria-pressed="${d0.weakTag === t}">${esc(WEAK_TAG_LABEL[t])}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field"><label>포지션 태그 (선택 · 비우면 전체)</label>
+      <div class="seg-wide wrap" id="f-dr-pos">
+        ${['FW', 'MF', 'DF', 'GK'].map((p) => `<button type="button" data-p="${p}" aria-pressed="${positions.has(p)}">${esc(POS_TAG_LABEL[p])}</button>`).join('')}
+      </div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1"><label>세트 × 횟수</label><input type="text" id="f-dr-sr" value="${esc(d0.setsReps)}" placeholder="예: 3세트 × 20회"></div>
+      <div class="field" style="flex:1"><label>주 권장 횟수</label><input type="number" id="f-dr-wr" min="1" max="14" value="${d0.weeklyReps || ''}" inputmode="numeric"></div>
+    </div>` : ''}
     <div class="row">
       <div class="field" style="flex:1"><label>소요 분</label><input type="number" id="f-dr-min" min="1" max="120" value="${d0.minutes}" inputmode="numeric"></div>
-      <div class="field" style="flex:1"><label>인원</label><input type="text" id="f-dr-players" value="${esc(d0.players)}" placeholder="예: 4인 이상"></div>
+      <div class="field" style="flex:1"><label>인원</label><input type="text" id="f-dr-players" value="${esc(d0.players)}" placeholder="${scope === 'solo' ? '예: 혼자 · 2인' : '예: 4인 이상'}"></div>
     </div>
     <div class="field"><label>필요 장비</label><input type="text" id="f-dr-equip" value="${esc(d0.equipment)}" placeholder="예: 콘 4개 · 없음"></div>
     <div class="foot">
       ${existing ? `<button type="button" class="btn ${existing.hidden ? 'primary' : 'danger'}" data-act="toggle-hide">${existing.hidden ? '다시 보이기' : '숨기기'}</button>` : ''}
       <button class="btn ghost" data-act="cancel">취소</button>
       <button class="btn primary" data-act="save">저장</button>
-    </div>`, (m) => {
+    </div>`;
+  openModal(draw(), (m) => {
+    const repaint = () => { m.innerHTML = draw(); };
     m.addEventListener('click', (e) => {
+      const scb = e.target.closest('#f-dr-scope [data-s]');
+      if (scb) { scope = scb.dataset.s; repaint(); return; }
       const cb = e.target.closest('#f-dr-cat [data-c]');
       if (cb) { $$('#f-dr-cat [data-c]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === cb))); return; }
+      const wt = e.target.closest('#f-dr-weaktag [data-t]');
+      if (wt) { $$('#f-dr-weaktag [data-t]', m).forEach((b) => b.setAttribute('aria-pressed', String(b === wt))); return; }
+      const pb = e.target.closest('#f-dr-pos [data-p]');
+      if (pb) {
+        const p = pb.dataset.p;
+        if (positions.has(p)) positions.delete(p); else positions.add(p);
+        pb.setAttribute('aria-pressed', String(positions.has(p)));
+        return;
+      }
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'cancel') return closeModal();
       if (act === 'toggle-hide') {
         store.drills.setHidden(existing.id, !existing.hidden);
-        toast(existing.hidden ? '다시 보이게 했습니다' : '숨겼습니다(세션엔 그대로 남습니다)');
+        toast(existing.hidden ? '다시 보이게 했습니다' : '숨겼습니다(세션·과제엔 그대로 남습니다)');
         closeModal(); return afterModalClose(() => drillLibraryModal());
       }
       if (act === 'save') {
@@ -2272,12 +2477,20 @@ function drillFormModal(existing) {
         if (!name) { toast('드릴 이름을 입력해 주세요', 'err'); return; }
         const category = $('#f-dr-cat [aria-pressed="true"]', m)?.dataset.c || 'pass';
         const data = {
-          category, name,
+          category, scope, name,
           desc: $('#f-dr-desc', m).value.trim(),
           minutes: Number($('#f-dr-min', m).value) || 15,
           players: $('#f-dr-players', m).value.trim(),
           equipment: $('#f-dr-equip', m).value.trim(),
         };
+        if (scope === 'solo') {
+          data.weakTag = $('#f-dr-weaktag [aria-pressed="true"]', m)?.dataset.t || '';
+          data.positions = [...positions];
+          data.setsReps = $('#f-dr-sr', m).value.trim();
+          data.weeklyReps = Number($('#f-dr-wr', m).value) || null;
+        } else {
+          data.weakTag = ''; data.positions = []; data.setsReps = ''; data.weeklyReps = null;
+        }
         if (existing) { store.drills.update(existing.id, data); toast('수정했습니다'); }
         else { store.drills.add(data); toast(`${name} 추가`); }
         closeModal(); render();
@@ -2331,9 +2544,11 @@ function taskRowHTML(t, i, member, opts = {}) {
     ? `<span class="chip${t.done ? '' : ' warn'}">${t.done ? '완료' : '미완료'}</span>`
     : `<button type="button" class="btn sm ${t.done ? 'primary' : 'ghost'}" data-tk-done="${i}">${t.done ? '✓ 완료' : '완료 체크'}</button>
        <button type="button" class="btn sm danger" data-tk-del="${i}" aria-label="과제 삭제">×</button>`;
+  const drMeta = dr ? [dr.setsReps, dr.weeklyReps ? `주 ${dr.weeklyReps}회 권장` : '', dr.equipment].filter(Boolean).join(' · ') : '';
   return `<div class="task-row${t.done ? ' done' : ''}">
     <div class="tk-top"><span class="n">${esc(label)}</span>${actions}</div>
     ${dr?.desc ? `<div class="tk-meta">${esc(dr.desc)}</div>` : ''}
+    ${drMeta ? `<div class="tk-meta">${esc(drMeta)}</div>` : ''}
     ${t.target ? `<div class="tk-target">목표: ${esc(t.target)}</div>` : ''}
     ${diff}
   </div>`;
@@ -2641,9 +2856,14 @@ function memberModal(existing) {
       if (act === 'cancel') return closeModal();
       if (act === 'del') {
         closeModal();
-        if (await confirmDialog({ title: `${existing.name} 님을 삭제할까요?`, body: '출석 기록에서도 제거됩니다.', ok: '삭제', danger: true })) {
+        if (await confirmDialog({ title: `${existing.name} 님을 삭제할까요?`, body: '출석 기록·라인업·보드 배치에서도 함께 정리됩니다. 개인 훈련 과제는 "탈퇴 선수"로 남습니다.', ok: '삭제', danger: true })) {
+          const snapshot = { ...existing };   // 되돌리기용 — 삭제 직전 회원 통짜 보관(라인업·과제 연결까지는 되돌리지 않음, 회원 자체만 복원)
           store.members.remove(existing.id);
-          toast('삭제했습니다'); render();
+          render();
+          toastUndo(`${snapshot.name} 님을 삭제했습니다`, () => {
+            store.members.add(snapshot);   // id 를 그대로 살려 같은 회원으로 복원
+            toast('되돌렸습니다'); render();
+          });
         }
         return;
       }
@@ -3251,6 +3471,8 @@ function bindEvents() {
     }
     if (t.closest('#bd-save')) return saveBoardSnapshot();
     if (t.closest('#bd-png')) return exportBoardPNG();
+    if (t.closest('#bd-playbook-open')) return playbookLibrarySheet();
+    if (t.closest('#bd-playbook-save')) return savePlaybookModal();
     if (t.closest('#bd-panel-toggle')) { bd.panelOpen = !bd.panelOpen; return renderBoard(); }
     const cand = t.closest('.cand-chip');
     if (cand) {
