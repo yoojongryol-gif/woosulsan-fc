@@ -22,13 +22,13 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   effectiveSkill, isUnrated, MODULE_VERSION: STORE_VERSION,
   RUBRIC_GENDERS, rubricKeyFor, TESTS, testForAbil, parseTestInput, formatTestValue,
   localDateStr, FORMATION_PRESETS, formationSlots,
-  layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES } = STORE_NS;
+  layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES, QUICK_INSTRUCTION_PRESETS } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
 
-export const APP_VERSION = 'v1.0.0';
+export const APP_VERSION = 'v1.0.1';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -923,12 +923,16 @@ const bd = {
   arrows: [],             // [{x1,y1,x2,y2,style}]
   ball: null,
   setPiece: null,
-  mode: 'move',            // 'move' | 'arrow'
+  mode: 'move',            // 'move' | 'arrow' | 'sub'(경기 모드 전용 — 핀 탭 = 교체)
   arrowStyle: 'solid',
   panelOpen: false,         // 폰(세로)에서 후보 패널 펼침 여부
   pendingCand: null,         // 드래그 미지원 환경 대비 — 탭으로 고른 후보 선수 id
   loadedFrom: null,           // 마지막으로 불러온 matchId+snapshot 여부(경기 바뀔 때만 다시 채움)
   dirty: false,
+  /* ---- 경기 모드 (S4, 2026-09-29) ---- */
+  viewMode: 'prep',          // 'prep' | 'live'
+  locked: false,              // true 면 드래그·화살표·교체 시트를 모두 막는다(길게 눌러야 해제)
+  substitutions: [],           // [{minute,out,in}] — 선택된 경기의 교체 기록(store.matches.byId().substitutions 미러)
 };
 
 function boardMatches() { return store.matches.sorted(); }
@@ -958,7 +962,10 @@ function loadBoardFor(matchId) {
     bd.ball = null;
     bd.setPiece = null;
   }
+  bd.substitutions = (g?.substitutions || []).map((x) => ({ ...x }));
   bd.dirty = false;
+  bd.locked = false;
+  bd.mode = bd.viewMode === 'live' ? 'sub' : 'move';
   bd.loadedFrom = matchId || '__temp__';
 }
 
@@ -970,7 +977,11 @@ function loadBoardTemp() {
   const slots = cands.slice(0, need).map((m) => m.id);
   bd.ourPins = buildOurPins(bd.formation, slots, (id) => store.members.byId(id));
   bd.oppPins = buildOppPins(bd.oppFormation);
-  bd.arrows = []; bd.ball = null; bd.setPiece = null; bd.dirty = false; bd.loadedFrom = '__temp__';
+  bd.arrows = []; bd.ball = null; bd.setPiece = null; bd.substitutions = []; bd.dirty = false; bd.loadedFrom = '__temp__';
+  // 임시 라인업(경기 미선택)은 자동저장 대상이 없으므로 경기 모드로 들어갈 수 없다 — 준비 모드로 되돌린다
+  if (bd.viewMode === 'live') { bd.viewMode = 'prep'; releaseWakeLock(); }
+  bd.locked = false;
+  bd.mode = 'move';
 }
 
 /** 포메이션을 바꿀 때 — 겹치는 자리의 선수 배정은 최대한 유지하고 좌표만 새로 깐다 */
@@ -1086,6 +1097,50 @@ function renderBoard() {
   // 보드가 켜진 채로 다른 곳에서 선택된 경기가 지워졌으면 임시 라인업으로 조용히 내려온다
   if (bd.matchId && !matches.some((m) => m.id === bd.matchId)) loadBoardTemp();
 
+  if (bd.viewMode === 'live') { renderBoardLive(root); bindBoardPointer(); return; }
+  renderBoardPrep(root, matches);
+  bindBoardPointer();
+}
+
+/** 경기 모드(S4) — 세로 폰·한 손 조작·야외 고대비. 준비 모드와 같은 bd 상태를 그대로 쓴다 */
+function renderBoardLive(root) {
+  const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
+  const g = bd.matchId ? store.matches.byId(bd.matchId) : null;
+  root.innerHTML = `
+    <div class="board-live" id="bd-live-root">
+      <div class="live-topbar">
+        <button type="button" class="livebtn lockbtn${bd.locked ? ' on' : ''}" id="bd-lock" aria-pressed="${bd.locked}">${bd.locked ? '🔒 잠김' : '🔓 잠금'}</button>
+        <div class="live-title">${esc(opp ? opp.name : '상대 미정')}${g ? ` · ${esc(fmtDate(g.date))}` : ''}</div>
+        <button type="button" class="livebtn ghost" id="bd-exit-live">준비 모드로</button>
+      </div>
+      <div class="pitch-wrap live-pitch" id="bd-pitch">
+        ${boardPitchSVG()}
+        <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
+        <div id="bd-pins" style="position:absolute;inset:0">
+          ${bd.oppPins.map(oppPinHTML).join('')}
+          ${bd.ourPins.map(ourPinHTML).join('')}
+          ${ballHTML()}
+        </div>
+        ${bd.locked ? '<div class="live-lock-veil">잠김 — 잠금 버튼을 길게 눌러 해제</div>' : ''}
+      </div>
+      ${bd.mode === 'sub' ? '<div class="live-hint">우리 선수를 눌러 교체하세요</div>' : ''}
+      ${bd.mode === 'arrow' ? `<div class="row" style="justify-content:center;gap:8px;margin:6px 0">
+          <button class="toolbtn" data-astyle="solid" aria-pressed="${bd.arrowStyle === 'solid'}">실선</button>
+          <button class="toolbtn" data-astyle="dashed" aria-pressed="${bd.arrowStyle === 'dashed'}">점선</button>
+        </div>` : ''}
+      <div class="live-presets">
+        ${Object.entries(QUICK_INSTRUCTION_PRESETS).map(([k, p]) => `<button type="button" class="livebtn preset" data-preset="${k}">${esc(p.label)}</button>`).join('')}
+      </div>
+      <div class="live-bottom">
+        <button type="button" class="livebtn big" id="bd-live-sub" aria-pressed="${bd.mode === 'sub'}">선수 교체</button>
+        <button type="button" class="livebtn big" id="bd-live-arrow" aria-pressed="${bd.mode === 'arrow'}">화살표</button>
+        <button type="button" class="livebtn big" id="bd-live-clear">지우기</button>
+      </div>
+      <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION}</div>
+    </div>`;
+}
+
+function renderBoardPrep(root, matches) {
   const opponents = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   root.innerHTML = `
     <div class="row" style="margin:10px 0 8px;gap:8px">
@@ -1147,7 +1202,6 @@ function renderBoard() {
       <button type="button" class="board-panel-toggle" id="bd-panel-toggle" aria-expanded="${bd.panelOpen}">라인업 후보 · 상대 메모 ${bd.panelOpen ? '접기 ▾' : '펼치기 ▸'}</button>
       <div class="board-panel${bd.panelOpen ? ' open' : ''}" id="bd-panel">${boardCandPanelHTML()}</div>
     </div>`;
-  bindBoardPointer();
 }
 
 /* ---------- 포인터: 핀/공 드래그 · 화살표 · 후보 드래그 투입 ---------- */
@@ -1174,10 +1228,18 @@ function bindBoardPointer() {
   };
 
   $('#bd-pins')?.addEventListener('pointerdown', (e) => {
+    if (bd.locked) return;   // 잠금 중엔 드래그·그리기·교체를 모두 무시한다
     const ball = e.target.closest('[data-ball]');
     const pin = e.target.closest('.pin');
     if (!ball && !pin) return;
     e.preventDefault();
+
+    // 경기 모드 · 교체 모드 — 우리 핀을 탭하면 드래그 없이 바로 교체 시트를 연다
+    if (bd.viewMode === 'live' && bd.mode === 'sub') {
+      if (pin && pin.dataset.side === 'us') substituteSheet(Number(pin.dataset.idx));
+      return;
+    }
+
     const target = e.target.closest('.pin, .ball-marker');
     target.setPointerCapture?.(e.pointerId);
 
@@ -1189,7 +1251,10 @@ function bindBoardPointer() {
       const move = (ev) => { const p = pct(ev); stroke.x2 = p.x; stroke.y2 = p.y; redrawArrowsLive(); };
       const up = () => {
         pitch.removeEventListener('pointermove', move); pitch.removeEventListener('pointerup', up); pitch.removeEventListener('pointercancel', cancel);
-        if (Math.hypot(stroke.x2 - stroke.x1, stroke.y2 - stroke.y1) > 1.5) { bd.arrows.push(stroke); bd.dirty = true; }
+        if (Math.hypot(stroke.x2 - stroke.x1, stroke.y2 - stroke.y1) > 1.5) {
+          bd.arrows.push(stroke); bd.dirty = true;
+          if (bd.viewMode === 'live') autosaveBoard();
+        }
         redrawArrows();
       };
       const cancel = () => { pitch.removeEventListener('pointermove', move); pitch.removeEventListener('pointerup', up); redrawArrows(); };
@@ -1199,7 +1264,9 @@ function bindBoardPointer() {
       return;
     }
 
-    // 이동 모드 — 핀/공 드래그
+    if (bd.viewMode === 'live') return;   // 안전장치 — 경기 모드에는 자유 이동(드래그) 모드가 없다
+
+    // 이동 모드(준비 모드 전용) — 핀/공 드래그
     target.classList.add('dragging');
     const move = (ev) => {
       const p = pct(ev);
@@ -1221,6 +1288,23 @@ function bindBoardPointer() {
     target.addEventListener('pointerup', up);
     target.addEventListener('pointercancel', up);
   });
+
+  // 경기 모드 — 잠금 버튼: 짧게 누르면 잠기고, 잠긴 상태에서는 길게(600ms) 눌러야 풀린다
+  const lockBtn = $('#bd-lock');
+  if (lockBtn) {
+    let holdTimer = null; let longPressed = false;
+    lockBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      longPressed = false;
+      if (bd.locked) holdTimer = setTimeout(() => { longPressed = true; bd.locked = false; toast('잠금 해제'); renderBoard(); }, 600);
+    });
+    const finishHold = () => {
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      if (!bd.locked && !longPressed) { bd.locked = true; toast('보드 잠금 — 길게 눌러 해제'); renderBoard(); }
+    };
+    lockBtn.addEventListener('pointerup', finishHold);
+    lockBtn.addEventListener('pointercancel', finishHold);
+  }
 
   // 후보 선수 → 보드 자리로 드래그 투입 (포인터 기반, 터치 포함)
   $('#bd-panel')?.addEventListener('pointerdown', (e) => {
@@ -1292,6 +1376,109 @@ function saveBoardSnapshot() {
   store.matches.update(bd.matchId, { boardSnapshot: boardSnapshotFromState() });
   bd.dirty = false;
   toast('보드를 경기에 저장했습니다');
+  renderBoard();
+}
+
+/* ================= 전술보드 — 경기 모드 (S4, 2026-09-29) =================
+ * 마스터플랜 §3·§4(S4): 세로 폰·한 손 조작·야외 고대비. 준비 모드와 같은 bd 상태를 그대로 쓰되
+ * 화면(renderBoard 의 isLive 분기)과 입력 게이트(잠금)만 다르다. 변경은 즉시 저장(자동) —
+ * 준비 모드의 "보드 저장" 버튼이 하는 일을 매 조작마다 조용히 대신한다.
+ */
+
+/** 경기 모드에서의 변경을 그 자리에서 저장한다. 임시 라인업(경기 미선택)이면 조용히 무시 */
+function autosaveBoard() {
+  if (!bd.matchId) return;
+  store.matches.update(bd.matchId, { boardSnapshot: boardSnapshotFromState(), substitutions: bd.substitutions.map((s) => ({ ...s })) });
+  bd.dirty = false;
+}
+
+let wakeLockRef = null;
+/** 화면 꺼짐 방지 — 미지원 브라우저/거부된 요청은 조용히 무시한다(핵심 기능이 아니므로 없어도 앱은 그대로 동작) */
+async function requestWakeLock() {
+  try {
+    if (!('wakeLock' in navigator)) return;
+    if (wakeLockRef && !wakeLockRef.released) return;
+    wakeLockRef = await navigator.wakeLock.request('screen');
+    wakeLockRef.addEventListener?.('release', () => { wakeLockRef = null; });
+  } catch (e) { wakeLockRef = null; /* 미지원·거부 — 무시 */ }
+}
+async function releaseWakeLock() {
+  try { await wakeLockRef?.release?.(); } catch (e) { /* 무시 */ }
+  wakeLockRef = null;
+}
+
+function enterLiveMode() {
+  if (!bd.matchId) { toast('경기를 선택해야 경기 모드를 쓸 수 있습니다', 'err'); return; }
+  bd.viewMode = 'live';
+  bd.locked = false;
+  bd.mode = 'sub';
+  requestWakeLock();
+  renderBoard();
+}
+function exitLiveMode() {
+  bd.viewMode = 'prep';
+  bd.mode = 'move';
+  bd.locked = false;
+  releaseWakeLock();
+  renderBoard();
+}
+
+/** 빠른 지시 프리셋 — 화살표 묶음을 그 자리에서 덧그린다(기존 화살표는 남는다) */
+function applyQuickPreset(key) {
+  if (bd.locked) return;
+  const tpl = QUICK_INSTRUCTION_PRESETS[key];
+  if (!tpl) return;
+  bd.arrows = [...bd.arrows, ...tpl.arrows.map((a) => ({ ...a }))];
+  bd.dirty = true;
+  toast(`빠른 지시: ${tpl.label}`);
+  if (bd.viewMode === 'live') autosaveBoard();
+  renderBoard();
+}
+
+/** 경기 모드 — 오늘 가능 선수 중 지금 보드에 없는 선수(교체 후보) */
+function subCandidates() {
+  const onBoard = new Set(bd.ourPins.map((p) => p.memberId).filter(Boolean));
+  const pool = availableToday().length ? availableToday() : store.members.active();
+  return pool.filter((m) => !onBoard.has(m.id));
+}
+
+/** 핀을 탭했을 때 뜨는 교체 후보 시트 — 분(선택) 입력 + 큰 버튼 목록, 탭하면 즉시 교체 */
+function substituteSheet(pinIdx) {
+  const outPin = bd.ourPins[pinIdx];
+  if (!outPin) return;
+  const cands = subCandidates();
+  openModal(`
+    <h3>선수 교체${outPin.name ? ` · ${esc(outPin.name)} 나감` : ''}</h3>
+    <div class="field"><label>몇 분 (선택)</label><input type="number" min="0" max="130" inputmode="numeric" id="f-sub-min" placeholder="예: 35"></div>
+    <div class="section-title" style="margin-top:6px">들어올 선수</div>
+    <div class="sub-cand-list">${cands.length ? cands.map((m) => `
+        <button type="button" class="btn block sub-cand-btn" data-sub-in="${m.id}">${esc(m.name)}</button>`).join('')
+      : '<div class="dim" style="padding:8px 0">교체로 넣을 수 있는 선수가 없습니다(오늘 가능 선수가 모두 보드에 있습니다).</div>'}</div>
+    <div class="foot"><button class="btn ghost" data-act="cancel">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="cancel"]')) return closeModal();
+      const btn = e.target.closest('[data-sub-in]');
+      if (!btn) return;
+      const inId = btn.dataset.subIn;
+      const minuteVal = $('#f-sub-min', m).value;
+      const minute = minuteVal.trim() ? Math.max(0, Math.min(130, Math.round(Number(minuteVal)))) : null;
+      closeModal();
+      substitutePlayer(pinIdx, inId, minute);
+    });
+  });
+}
+
+/** 실제 교체 — 자리의 회원을 바꾸고 substitutions 에 기록, 경기 모드면 즉시 저장 */
+function substitutePlayer(pinIdx, inMemberId, minute) {
+  const outPin = bd.ourPins[pinIdx];
+  const inMem = store.members.byId(inMemberId);
+  if (!outPin || !inMem) return;
+  const outId = outPin.memberId;
+  bd.ourPins[pinIdx] = { ...outPin, memberId: inMem.id, name: inMem.name };
+  bd.substitutions = [...bd.substitutions, { minute, out: outId, in: inMem.id }];
+  bd.dirty = true;
+  if (bd.viewMode === 'live') autosaveBoard();
+  toast(`교체: ${inMem.name} 투입`);
   renderBoard();
 }
 
@@ -2470,6 +2657,12 @@ function bindEvents() {
     if (b) switchTab(b.dataset.tab);
   });
 
+  // 경기 모드(S4) 화면 꺼짐 방지 — 탭이 백그라운드로 가면 브라우저가 Wake Lock 을 스스로 놓는다.
+  // 다시 보이면(눈 돌렸다 돌아오기 포함) 여전히 경기 모드면 다시 요청한다.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && bd.viewMode === 'live') requestWakeLock();
+  });
+
   document.addEventListener('click', async (e) => {
     const t = e.target;
 
@@ -2591,16 +2784,27 @@ function bindEvents() {
     const mo = t.closest('[data-match-open]');
     if (mo) return matchDetailModal(mo.dataset.matchOpen);
 
-    /* ----- 전술보드 (S3) ----- */
+    /* ----- 전술보드 (S3/S4) ----- */
     const vm = t.closest('#bd-view-mode [data-vm]');
     if (vm) {
-      if (vm.dataset.vm === 'live') { toast('경기 모드는 S4에서 만듭니다'); return; }
+      if (vm.dataset.vm === 'live') return enterLiveMode();
+      if (vm.dataset.vm === 'prep') return exitLiveMode();
       return;
     }
+    if (t.closest('#bd-exit-live')) return exitLiveMode();
+    if (t.closest('#bd-live-sub')) { if (bd.locked) return; bd.mode = 'sub'; return renderBoard(); }
+    if (t.closest('#bd-live-arrow')) { if (bd.locked) return; bd.mode = 'arrow'; return renderBoard(); }
+    if (t.closest('#bd-live-clear')) {
+      if (bd.locked || !bd.arrows.length) return;
+      bd.arrows = []; bd.dirty = true; autosaveBoard();
+      return renderBoard();
+    }
+    const presetBtn = t.closest('[data-preset]');
+    if (presetBtn) return applyQuickPreset(presetBtn.dataset.preset);
     if (t.closest('#bd-m-move')) { bd.mode = 'move'; return renderBoard(); }
     if (t.closest('#bd-m-arrow')) { bd.mode = 'arrow'; return renderBoard(); }
     const astyle = t.closest('[data-astyle]');
-    if (astyle) { bd.arrowStyle = astyle.dataset.astyle; return renderBoard(); }
+    if (astyle) { if (bd.locked) return; bd.arrowStyle = astyle.dataset.astyle; return renderBoard(); }
     if (t.closest('#bd-undo')) { bd.arrows.pop(); bd.dirty = true; return renderBoard(); }
     if (t.closest('#bd-clear')) {
       if (!bd.arrows.length) return;

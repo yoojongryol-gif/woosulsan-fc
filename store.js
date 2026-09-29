@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.0.0';
+export const MODULE_VERSION = 'v1.0.1';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -269,6 +269,56 @@ export const SET_PIECE_TEMPLATES = {
   'corner-right': { label: '코너킥 (우)', ball: { x: 97, y: 5 }, hint: '우측 코너 — 공격 진영' },
   freekick: { label: '프리킥', ball: { x: 50, y: 32 }, hint: '박스 앞 프리킥 기본 위치' },
   kickoff: { label: '킥오프', ball: { x: 50, y: 50 }, hint: '센터서클 킥오프' },
+};
+
+/* ---------------- 빠른 지시 프리셋 (경기 모드, S4, 2026-09-29) ----------------
+ * 경기 모드에서 큰 버튼 6개를 누르면 화살표 묶음을 즉시 그려 넣는다(템플릿).
+ * 좌표는 SET_PIECE_TEMPLATES 와 같은 0~100 % 좌표계 — 그대로 arrows 배열에 이어 붙인다
+ * (되돌리기로 하나씩 지울 수 있으므로 "편집 가능"). 형태는 우리 진영(y>50) 기준 예시일 뿐,
+ * 감독이 보고 바로 뜻을 알 수 있는 화살표 묶음이면 된다.
+ */
+export const QUICK_INSTRUCTION_PRESETS = {
+  'press-up': {
+    label: '압박 올려',
+    arrows: [
+      { x1: 25, y1: 88, x2: 25, y2: 60, style: 'solid' },
+      { x1: 50, y1: 90, x2: 50, y2: 58, style: 'solid' },
+      { x1: 75, y1: 88, x2: 75, y2: 60, style: 'solid' },
+    ],
+  },
+  'drop-line': {
+    label: '라인 내려',
+    arrows: [
+      { x1: 25, y1: 58, x2: 25, y2: 82, style: 'dashed' },
+      { x1: 50, y1: 56, x2: 50, y2: 80, style: 'dashed' },
+      { x1: 75, y1: 58, x2: 75, y2: 82, style: 'dashed' },
+    ],
+  },
+  'switch-flank': {
+    label: '측면 전환',
+    arrows: [{ x1: 15, y1: 68, x2: 85, y2: 68, style: 'solid' }],
+  },
+  'narrow-defense': {
+    label: '수비 좁혀',
+    arrows: [
+      { x1: 12, y1: 85, x2: 34, y2: 85, style: 'solid' },
+      { x1: 88, y1: 85, x2: 66, y2: 85, style: 'solid' },
+    ],
+  },
+  counter: {
+    label: '역습',
+    arrows: [
+      { x1: 50, y1: 90, x2: 50, y2: 40, style: 'solid' },
+      { x1: 50, y1: 40, x2: 30, y2: 15, style: 'solid' },
+    ],
+  },
+  'build-up': {
+    label: '후방 빌드업',
+    arrows: [
+      { x1: 30, y1: 90, x2: 50, y2: 78, style: 'dashed' },
+      { x1: 70, y1: 90, x2: 50, y2: 78, style: 'dashed' },
+    ],
+  },
 };
 
 /* ---------------- 포지션 토큰 ----------------
@@ -895,6 +945,24 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       .filter((s) => s.memberId);
   }
 
+  /** 교체 기록 — { minute?, out, in } (S4: 경기 모드에서 핀을 탭해 교체할 때 남긴다).
+   * out/in 은 회원 id 문자열이어야 남는다(둘 다 없으면 버림). minute 은 선택 입력 — 숫자가
+   * 아니면 null(분 모름 표기), 0~130 밖이면 클램프(연장전을 감안해 넉넉히 잡음). */
+  function normalizeSubstitutions(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .slice(0, 200)
+      .map((s) => {
+        const minuteNum = Number(s?.minute);
+        return {
+          minute: Number.isFinite(minuteNum) ? Math.min(130, Math.max(0, Math.round(minuteNum))) : null,
+          out: typeof s?.out === 'string' && s.out ? s.out : null,
+          in: typeof s?.in === 'string' && s.in ? s.in : null,
+        };
+      })
+      .filter((s) => s.out || s.in);
+  }
+
   function normalizeMatch(x) {
     return {
       id: x.id || uid('g'),
@@ -908,6 +976,7 @@ export function createStore(adapter = new LocalStorageAdapter()) {
       opponentId: typeof x.opponentId === 'string' && x.opponentId ? x.opponentId : null,
       lineup: normalizeLineup(x.lineup),              // S2/S3
       boardSnapshot: normalizeBoardSnapshot(x.boardSnapshot),   // S3: 전술보드 저장본
+      substitutions: normalizeSubstitutions(x.substitutions),  // S4: 경기 모드 교체 기록
       result: normalizeResult(x.result),              // S2
       scorers: normalizeScorers(x.scorers),           // S2
       review: typeof x.review === 'string' ? x.review.slice(0, 1000) : '',   // S2
@@ -1465,7 +1534,11 @@ export function createStore(adapter = new LocalStorageAdapter()) {
             ...g.boardSnapshot,
             ourPins: g.boardSnapshot.ourPins.map((p) => (p.memberId ? { ...p, memberId: remap(p.memberId) } : p)),
           } : null;
-          state.matches.push({ ...g, attendance: att, opponentId: remapOpp(g.opponentId), lineup, scorers, boardSnapshot });
+          // S4: 교체 기록도 회원 id 를 새 기기 기준으로 다시 잇는다(안 하면 교체 상대가 안 보임)
+          const substitutions = (g.substitutions || []).map((s) => ({
+            ...s, out: s.out ? remap(s.out) : null, in: s.in ? remap(s.in) : null,
+          }));
+          state.matches.push({ ...g, attendance: att, opponentId: remapOpp(g.opponentId), lineup, scorers, boardSnapshot, substitutions });
         }
         const tids = new Set(state.tactics.map((t) => t.id));
         for (const t of next.tactics) {

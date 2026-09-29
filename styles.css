@@ -963,3 +963,53 @@ a.btn { text-decoration: none; }
   .board-panel-toggle { display: none; }
   .board-panel { display: block; flex: 0 0 260px; margin-top: 0; max-height: calc(100dvh - var(--tabbar-h) - 90px); overflow: auto; }
 }
+
+/* ---------- 전술보드 · 경기 모드 (S4, 2026-09-29) ----------
+ * 세로 폰·한 손 조작·야외(햇빛·장갑) 전제. 다크모드 여부와 무관하게 항상 밝고 진한 고대비
+ * 팔레트를 쓴다(테마 변수에 얹지 않고 고정값) — 실외 햇빛에서 옅은 색은 안 보이기 때문.
+ * 색만으로 구분하지 않는다: 우리(파랑/노랑 GK)·상대(점선 고스트)·번호·GK 글자로 이중 구분.
+ */
+.board-live {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 8px;
+  --live-ink: #10140f; --live-paper: #fff9e8; --live-line: #10140f;
+}
+.live-topbar { display: flex; align-items: center; gap: 8px; }
+.live-title {
+  flex: 1; min-width: 0; text-align: center; font-weight: 900; font-size: 15px;
+  color: var(--live-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.livebtn {
+  padding: 12px 14px; border-radius: 12px; border: 2.5px solid var(--live-line);
+  background: var(--live-paper); color: var(--live-ink); font-weight: 900; font-size: 15px;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.livebtn.ghost { background: transparent; border-color: rgba(16,20,15,.35); font-size: 13.5px; padding: 10px 12px; }
+.livebtn.lockbtn.on { background: #ffe27a; }
+.livebtn[aria-pressed="true"] { background: #1f7a4d; border-color: #1f7a4d; color: #fff; }
+.live-pitch { background: #2fa25f; border: 3px solid var(--live-line); touch-action: none; }
+.live-pitch svg.pitch rect,
+.live-pitch svg.pitch line,
+.live-pitch svg.pitch circle,
+.live-pitch svg.pitch path { stroke-width: 1.2; }
+.live-pitch .pin .dot {
+  width: 42px; height: 42px; font-size: 15px; font-weight: 900; border-width: 3px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.5);
+}
+.live-pitch .pin .lbl { font-size: 13px; font-weight: 900; padding: 2px 7px; max-width: 96px; }
+.live-pitch .pin .dot.ghost { border-width: 3px; font-size: 11px; }
+.live-lock-veil {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(16,20,15,.28); color: #fff; font-weight: 900; font-size: 16px; text-align: center;
+  padding: 0 24px; pointer-events: none;
+}
+.live-hint { text-align: center; font-weight: 800; font-size: 14px; color: var(--text-2); }
+.live-presets { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.livebtn.preset { font-size: 14px; padding: 11px 14px; background: var(--surface-2); border-color: var(--line-strong); color: var(--text); }
+.live-bottom { display: flex; gap: 8px; }
+.livebtn.big { flex: 1; padding: 16px 8px; font-size: 16px; min-height: 56px; }
+
+@media (min-width: 820px) {
+  .board-live { max-width: 480px; margin-left: auto; margin-right: auto; }
+}
+.sub-cand-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.sub-cand-btn { text-align: left; font-size: 15px; }

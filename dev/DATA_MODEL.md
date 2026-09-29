@@ -1,4 +1,4 @@
-# 축구&joy 데이터 모델 (schema 3, v1.0.0)
+# 축구&joy 데이터 모델 (schema 3, v1.0.1)
 
 > **v1.0 전면 개편 (2026-09-29)** — 마스터플랜 `C:/종합상사/data/plans/soccer_app_v1_tactics_masterplan_2026-09-29.md`
 > 사장님 확정: **상대는 외부 클럽만**. 내부 팀 배정(A~F)·팀 묶음 제안·팀별 감독 평가는 이 앱에서 없앴다.
@@ -6,6 +6,7 @@
 > **S1**(v1.0.0-alpha, 2026-09-29 아침): 우리팀 탭만 완성, 나머지는 자리표시.
 > **S2**(v1.0.0-beta, 2026-09-29 오후): 상대팀 카드 + 경기 기록(라인업 목록 배치·결과·득점자/도움) + 전적 자동 계산. 전술보드는 여전히 자리표시(S3 준비 중).
 > **S3**(v1.0.0, 2026-09-29 저녁): 전술보드 **준비 모드** — 필드 SVG + 우리 라인업(파란 원)·상대 포메이션(회색 점선 원) 자동 배치·드래그(포인터)·화살표·세트피스 템플릿·PNG 내보내기·`match.boardSnapshot` 저장. 경기 모드(폰·큰 글씨·잠금)는 S4, 토글 자리만 있다.
+> **S4**(v1.0.1, 2026-09-29 밤): 전술보드 **경기 모드** — 세로 폰 전제 고대비 화면(하단 큰 버튼 3개: 선수 교체·화살표·지우기), 잠금 토글(길게 눌러 해제), 화면 꺼짐 방지(Wake Lock API, 미지원 시 무시), 핀 탭 → 교체 후보 목록 → 탭 교체(`match.substitutions` 기록), 빠른 지시 프리셋 6개(화살표 묶음 즉시 삽입). 변경 즉시 `match.boardSnapshot`/`match.substitutions` 자동 저장 — 준비 모드와 스냅샷을 공유한다.
 > 내려간 코드는 `dev/parked/`(balance.js · tactics-v0.x.js · team-tab-v0.7.js · test-teams-v0.7.mjs)에 있다.
 > `dev/parked/tactics-v0.x.js` 는 S3 에서 **필드 SVG 뼈대(펜티박스·센터서클 좌표)만** 참고했다 — 5팀 의존 코드(teamOptions·TEAM_KEYS 등)는 가져오지 않았다.
 
@@ -74,6 +75,7 @@
 | `opponentId` | string \| null | **S2** | 상대 클럽 카드 id. 상대 카드를 지우면 `null` 로 풀린다(경기 자체는 안 지워짐) |
 | `lineup` | `{ formation, slots: (memberId\|null)[] }` \| null | **S2/S3** | `formation` 은 `FORMATION_PRESETS` 중 하나(store.js). `slots` 길이·순서는 `formationSlots(formation)` 의 포지션 목록과 1:1 — S2 는 포지션별 목록 배치(경기 상세의 "라인업" 편집), 전술보드(S3)는 이 값을 **읽어서** 초기 배치의 출발점으로만 쓴다(되쓰지 않는다) |
 | `boardSnapshot` | `BoardSnapshot` \| null | **S3** | 전술보드 준비 모드에서 "보드 저장"을 눌렀을 때만 생긴다. 저장 전까지는 `null` — 화면은 그때그때 `lineup`·상대 카드에서 기본 배치를 다시 계산해 보여준다(3-2 참고) |
+| `substitutions` | `[{ minute, out, in }]` | **S4** | 경기 모드에서 보드의 핀을 탭해 교체할 때마다 하나씩 쌓인다. `out`/`in` 은 회원 id, `minute` 은 선택 입력(숫자 아니면 `null`). 기본은 `[]` — `normalizeSubstitutions()` 가 `out`·`in` 이 둘 다 없는 항목은 버린다. 회원을 지워도 이 기록의 id 는 그대로 남는다(과거 있었던 일이므로) — 화면에서 이름을 못 찾으면 "탈퇴 선수"로 표시 |
 | `result` | `{ gf, ga }` \| null | **S2** | 득실(0 이상 정수). 상대 전적 계산의 근거 |
 | `scorers` | `[{ memberId, count, assistId }]` | **S2** | 득점자·개수·도움(선택). `assistId` 는 S2 에서 새로 추가된 칸(마스터플랜 "득점자·도움 선택") |
 | `review` | string | **S2** | 경기 총평 |
@@ -130,6 +132,29 @@ S3 의 새 보드는 v0.x 처럼 별도 목록(여러 장 저장)이 아니라, 
 - **세트피스 템플릿**(`SET_PIECE_TEMPLATES`): 코너킥(좌/우)·프리킥·킥오프 — 공 위치만 기본값으로 잡아 준다("기본 배치"). 선수 11명 전원을 재배치하지는 않는다(감독이 직접 조정하는 몫으로 남겨 둠).
 - 정규화(`normalizeBoardSnapshot`)는 좌표를 0~100 으로 클램프하고, `ourPins`/`oppPins` 길이를 포메이션 슬롯 수에 맞춰 자르거나 빈 자리로 채운다 — 깨진 저장본이 들어와도 화면이 죽지 않는다.
 - 회원을 삭제하면 `ourPins` 에서 그 자리는 `memberId:null`(공석)로 풀릴 뿐, 좌표·나머지 배치는 그대로 남는다(`store.members.remove`).
+
+## 4.1 전술보드 — 경기 모드 (**S4, 2026-09-29 구현**)
+
+준비 모드(S3)와 같은 엔진(필드 SVG·`bd.ourPins`/`bd.oppPins`/`bd.arrows`/`bd.ball`)을 공유하되, 화면은 완전히 다시 짠다 —
+세로 폰 한 손 조작 전제, 경기장 밖 사용(햇빛·장갑)을 기준으로 한다(app.js `renderBoard()` 의 `isLive` 분기).
+
+- **모드 전환**: `bd.viewMode` = `'prep'` \| `'live'`. 준비 모드 상단 세그먼트("경기 모드" 버튼)로 들어가며, 경기가 선택돼 있지 않으면
+  (`bd.matchId` 없음) 들어갈 수 없다 — 교체 기록·자동저장이 경기 1건에 붙는 구조라서다.
+- **자동 저장**: 경기 모드에서의 모든 변경(핀 이동·화살표·프리셋·교체·세트피스)은 그 즉시 `store.matches.update(matchId, { boardSnapshot, substitutions })` 로 저장된다 —
+  준비 모드의 "보드 저장" 버튼과 달리 누를 게 없다. 스냅샷 구조는 3-2·4장과 동일(공용).
+- **잠금**(`bd.locked`): 기본 꺼짐. 한 번 누르면 즉시 켜지고, 켜진 상태에서는 **길게 눌러야**(600ms) 풀린다 — 짧게 누르는 건 무시한다.
+  잠금 중에는 핀 드래그·화살표 그리기·교체 시트 열기가 전부 막힌다(포인터 이벤트 진입 지점에서 `if (bd.locked) return`).
+- **화면 꺼짐 방지**: `navigator.wakeLock.request('screen')` — 경기 모드에 들어갈 때 요청, 나갈 때/탭이 숨겨질 때 해제.
+  브라우저가 안 지원하거나 요청이 실패해도(`try/catch`) 화면은 그대로 동작한다(필수 기능 아님). 탭이 다시 보이면(`visibilitychange`) 경기 모드인 동안 다시 요청한다(브라우저가 백그라운드에서 자동으로 놓기 때문).
+- **선수 교체**(`bd.mode === 'sub'`, 경기 모드 기본값): 우리 핀을 탭하면 "오늘 가능 선수 중 아직 보드에 없는 선수" 목록이 큰 버튼으로 뜬다(분 입력은 선택).
+  하나를 탭하면 그 자리 선수와 맞바뀌고, `match.substitutions` 에 `{ minute, out, in }` 한 줄이 쌓인다(위 3장 표). 교체된 뒤 나간 선수는 다시 후보 목록에 나타난다(다른 자리로 재투입 가능).
+- **화살표**(`bd.mode === 'arrow'`): 준비 모드와 같은 드래그 방식.
+- **지우기**: 그려진 화살표를 전부 지운다(`bd.arrows = []`) — 확인창 없이 바로 지운다(경기 중 속도 우선, 실수 방지는 잠금이 맡는다).
+- **빠른 지시 프리셋**(`QUICK_INSTRUCTION_PRESETS`, store.js): 압박 올려·라인 내려·측면 전환·수비 좁혀·역습·후방 빌드업 6개 — 누르면 미리 정해 둔 화살표 묶음이 `bd.arrows` 뒤에 그대로 이어붙는다.
+  선수 배치를 바꾸지 않고 화살표만 더한다. "편집 가능"은 기존 화살표 도구와 같다 — 되돌리기로 하나씩 지우거나 직접 새로 그릴 수 있다.
+- **고대비 팔레트**: `.board-live` 클래스로 필드 채도·테두리 굵기를 올리고, 핀 글자·라벨을 18px 이상으로 키운다. 우리/상대/GK 구분은 색만이 아니라
+  라벨 문자(등번호·`GK`·포지션 글자)로도 되어 있다(기존 S3 구조 그대로 — 색맹도 자리 종류를 읽을 수 있다).
+- **되돌아가기**: "준비 모드로 돌아가기" 버튼 — `bd.viewMode = 'prep'`, 잠금 해제, Wake Lock 해제. 스냅샷은 공유되므로 준비 모드로 돌아가도 방금 만든 배치가 그대로 보인다.
 
 ## 4.5 AI 설정 — **앱 데이터와 분리 저장**
 
@@ -249,7 +274,7 @@ clubs/{clubId}                    name, adminUids[]
 |---|---|---|---|
 | 우리팀 | 명단·포지션·능력치·오늘 출석·"오늘 가능" 필터 | `members`, `matches.today()`, `stats.attendance` | `members.*`, `matches.setAttendance` |
 | 상대팀 | 클럽 카드 목록·상세(메모·경기 이력) | `opponents.all()`, `opponents.matchesOf()` | `opponents.add/update/remove/addNote` |
-| 전술보드 | 준비 모드 — 필드 SVG·라인업 후보·상대 메모 패널·드래그·화살표·세트피스·PNG (경기 모드는 S4 토글 자리만) | `matches.sorted()`, `matches.byId().boardSnapshot`, `opponents.all()`, `members.active()`, `availableToday()` | `matches.update(id, { boardSnapshot })` (저장을 눌러야 씀) |
+| 전술보드 | 준비 모드 — 필드 SVG·라인업 후보·상대 메모 패널·드래그·화살표·세트피스·PNG. 경기 모드(S4) — 고대비 세로 폰 화면·잠금·Wake Lock·핀 탭 교체·빠른 지시 프리셋 | `matches.sorted()`, `matches.byId().boardSnapshot/substitutions`, `opponents.all()`, `members.active()`, `availableToday()` | 준비 모드 `matches.update(id, { boardSnapshot })`(저장을 눌러야 씀) / 경기 모드 `matches.update(id, { boardSnapshot, substitutions })`(변경마다 자동) |
 | 경기 | 목록·만들기·라인업·결과 입력 | `matches.sorted()`, `opponents.all()`, `members.active()` | `matches.add/update/remove` (저장할 때마다 상대 전적 자동 재계산) |
 
 - 버전 스탬프: `app.js APP_VERSION` = `store.js`/`env.js`/`drafts.js` 의 `MODULE_VERSION` = `sw.js VERSION`.
