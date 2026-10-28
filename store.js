@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.1.1';
+export const MODULE_VERSION = 'v1.2.0';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,

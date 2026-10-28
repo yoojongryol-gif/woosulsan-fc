@@ -16,6 +16,7 @@ import * as ROSTER_NS from './roster.js';
 import * as ENV_NS from './env.js';
 import * as DRAFTS_NS from './drafts.js';
 import * as AI from './ai.js';
+import * as INVITE_NS from './invite.js';
 
 const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   ABILITIES, abilAvg, GENDERS, parseMemberLine, splitNamePosition, analyzeMemberName,
@@ -29,8 +30,10 @@ const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
+const { INVITE_CODE, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
+  currentSessionName, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.1.1';
+export const APP_VERSION = 'v1.2.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -450,6 +453,25 @@ function aiAskModal() {
       if (act === 'ask') ask();
     });
   });
+}
+
+/* ---------- 회원 초대 카드 (v1.2.0 베타) ---------- */
+function inviteSettingsCard() {
+  const me = currentSessionName();
+  const exp = INVITE_EXPIRES_AT ? new Date(INVITE_EXPIRES_AT).toLocaleDateString('ko-KR') : '무제한';
+  return `<div class="section-title">회원 초대 (베타)</div>
+    <div class="card">
+      <div class="field"><label>초대 코드</label>
+        <div class="keyrow"><code style="font-size:16px">${esc(INVITE_CODE)}</code>
+          <button class="btn sm" id="btn-invite-copy">복사</button></div>
+      </div>
+      <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
+        회원에게 이 코드를 알려주면 이름 + 코드로 들어옵니다(비밀번호 없음). 만료: ${esc(exp)}.<br>
+        <b>코드를 바꾸려면</b> "초대코드 바꿔줘"라고 말씀해 주세요 — 코드가 바뀌면 전 기기가 자동으로 다시 로그인합니다.<br>
+        ⚠️ 로그인은 접근만 막을 뿐, 회원 기기는 이 기기와 데이터가 공유되지 않습니다(각자 빈 앱으로 시작).
+      </div>
+      ${me ? `<div class="row" style="margin-top:10px"><button class="btn sm danger" id="btn-invite-logout">이 기기 로그아웃 (${esc(me)})</button></div>` : ''}
+    </div>`;
 }
 
 /* ---------- AI 설정 카드 ---------- */
@@ -903,6 +925,7 @@ function renderOurTeam() {
       </div>
       <button class="btn danger block" id="btn-reset" style="margin-top:12px">전체 데이터 초기화</button>
     </div>
+    ${inviteSettingsCard()}
     ${aiSettingsCard()}
     <div class="footer-note">${esc(APP_NAME)} · <b>${APP_VERSION}</b> · <span id="sw-state">로컬 저장</span></div>`;
 
@@ -3530,6 +3553,17 @@ function bindEvents() {
       toast('초기화했습니다');
       render();
     }
+    if (t.closest('#btn-invite-copy')) {
+      navigator.clipboard?.writeText(INVITE_CODE).then(() => toast('코드를 복사했습니다'))
+        .catch(() => toast('복사 실패 — 직접 선택해 복사해 주세요', 'err'));
+      return;
+    }
+    if (t.closest('#btn-invite-logout')) {
+      if (!await confirmDialog({ title: '이 기기를 로그아웃할까요?', body: '다음에 열 때 이름과 초대 코드를 다시 입력해야 합니다.', ok: '로그아웃', danger: true })) return;
+      clearSession();
+      location.reload();
+      return;
+    }
   });
 
   document.addEventListener('change', (e) => {
@@ -3688,7 +3722,7 @@ function registerSW() {
  *    ③ 그래도 안 되면 그때 사람이 읽을 안내를 띄운다
  */
 function checkModuleVersions() {
-  const mods = { 'store.js': STORE_VERSION, 'env.js': ENV_VERSION };
+  const mods = { 'store.js': STORE_VERSION, 'env.js': ENV_VERSION, 'invite.js': INVITE_VERSION };
   const bad = Object.entries(mods).filter(([, v]) => v !== APP_VERSION);
   if (!bad.length) {
     try { sessionStorage.removeItem(`fc-mod-reload:${APP_VERSION}`); sessionStorage.removeItem('fc-mod-reload'); } catch (e) { /* 무시 */ }
@@ -3755,9 +3789,56 @@ function showModuleMismatch(bad) {
   }
 }
 
+/* ================= 초대 코드 게이트 (v1.2.0, 베타) =================
+ * 회원 3명 베타 1단계: 이름+초대 코드만(비밀번호 없음), 통과하면 이 기기에 로그인 기록을 남긴다.
+ * 백엔드가 없어 기기마다 저장이 분리되므로, 이 게이트는 "접근 차단"만 하고 데이터를 공유하지 않는다
+ * (invite.js 상단 주석 참고). */
+function renderGate(errMsg) {
+  const root = $('#gate-root');
+  if (!root) return;
+  document.querySelector('.app')?.setAttribute('style', 'display:none');
+  root.innerHTML = `
+    <div class="gate">
+      <div class="gate-card">
+        <div class="gate-logo">${LOGO}</div>
+        <div class="gate-title">${esc(APP_NAME)} <span class="badge-beta">베타</span></div>
+        <div class="gate-sub">${esc(store?.club?.name?.() || '웃을산 FC')} 회원만 들어올 수 있어요</div>
+        <div class="field"><label>이름</label>
+          <input type="text" id="gate-name" placeholder="예: 홍길동" maxlength="20" autocomplete="name"></div>
+        <div class="field"><label>초대 코드</label>
+          <input type="text" id="gate-code" placeholder="사장님께 받은 코드" autocomplete="off" autocapitalize="off"></div>
+        ${errMsg ? `<div class="gate-err">${esc(errMsg)}</div>` : ''}
+        <button class="btn primary block" id="gate-submit">들어가기</button>
+      </div>
+    </div>`;
+  const submit = () => {
+    const name = $('#gate-name').value.trim();
+    const code = $('#gate-code').value;
+    if (!name) return renderGate('이름을 입력해 주세요');
+    const r = checkCode(code);
+    if (!r.ok) {
+      const msg = r.reason === 'expired' ? '초대 코드 기간이 끝났습니다. 사장님께 문의해 주세요'
+        : '코드가 맞지 않습니다. 사장님께 다시 받아주세요';
+      return renderGate(msg);
+    }
+    writeSession(name);
+    document.querySelector('.app')?.removeAttribute('style');
+    root.innerHTML = '';
+    startApp();
+  };
+  $('#gate-submit').addEventListener('click', submit);
+  root.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  $('#gate-name').focus();
+}
+
 /* ================= 시작 ================= */
 async function main() {
   if (!checkModuleVersions()) return;   // 캐시가 섞였으면 복구 후 다시 시작한다
+  if (!sessionValid()) { renderGate(); return; }   // 로그인 안 됐거나 코드가 바뀌었으면 게이트부터
+  await startApp();
+}
+
+async function startApp() {
   $('#brand-logo').innerHTML = LOGO;
   $('#topbar-sub').textContent = APP_VERSION;   // 화면 빌드 표식
   $$('.tabbar button').forEach((b) => { $('.ico', b).innerHTML = ICON[b.dataset.icon]; });
