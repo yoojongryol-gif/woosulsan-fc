@@ -5,7 +5,7 @@
  */
 
 /** 버전 스탬프 — app.js 와 다르면 캐시가 섞인 것이므로 앱이 스스로 복구한다 */
-export const MODULE_VERSION = 'v1.2.0';
+export const MODULE_VERSION = 'v1.3.0';
 
 /* v1.0: 내부 팀(A~F) 구조를 걷어낸 스키마.
  * 2 → 3 올라갈 때 회원의 소속 팀(A~F), 클럽의 팀 목록·팀 순서·팀 약자·팀 이름,
@@ -17,6 +17,8 @@ export const SCHEMA_VERSION = 3;
 
 /** 마이그레이션 직전 자동 백업이 들어가는 자리 (앱 데이터와 다른 키) */
 export const LEGACY_BACKUP_KEY = 'woosulsan-fc:backup-v0.7';
+/** FAULT 스위치(고의 실패 모드) 키 — '1'이면 다음 저장 1번이 실패하고 자동으로 지워진다 (v1.3.0) */
+export const FAULT_KEY = 'woosulsan-fc:fault';
 
 /** 흔한 한 글자 성 — 이름 앞에 한 글자가 떨어져 있어도 성이면 이름의 일부로 본다 ("홍 길동") */
 const COMMON_SURNAMES = new Set(('김이박최정강조윤장임한오서신권황안송전홍유고문양손배백허남심노하곽성차주우구민류나진지엄채원천방공현함변염여추도소石마길연위표명기반왕琴옥육印맹제모남궁탁국여진어은편구용').split(''));
@@ -1302,10 +1304,32 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     }
   }
 
+  /* v1.3.0 실패 가시화: 저장 실패를 삼키지 않고 등록된 처리기(app.js 실패 패널)로 넘긴다.
+   * FAULT 스위치(localStorage FAULT_KEY='1')가 켜져 있으면 다음 저장 1번을 고의로 실패시키고 스스로 꺼진다. */
+  const saveErrorHandlers = new Set();
+  function consumeFault() {
+    try {
+      const ls = globalThis.localStorage;
+      if (ls?.getItem(FAULT_KEY) !== '1') return false;
+      ls.removeItem(FAULT_KEY);
+      return true;
+    } catch (e) { return false; }
+  }
+  async function doSave() {
+    if (consumeFault()) throw new Error('FAULT 스위치 — 테스트용으로 저장을 1번 일부러 막았습니다.');
+    return adapter.save(state);
+  }
+  function reportSaveError(e) {
+    // FAULT(고의 실패)는 테스트라 warn, 진짜 실패만 error 로 남긴다
+    (/FAULT/.test(String(e?.message)) ? console.warn : console.error)('[store] 저장 실패', e);
+    if (!saveErrorHandlers.size) return;
+    for (const fn of saveErrorHandlers) { try { fn(e); } catch (err) { console.error(err); } }
+  }
+
   function touch() {
     state.updatedAt = new Date().toISOString();
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { adapter.save(state).catch(() => {}); }, 60);
+    saveTimer = setTimeout(() => { doSave().catch(reportSaveError); }, 60);
     emit();
   }
 
@@ -1522,6 +1546,10 @@ export function createStore(adapter = new LocalStorageAdapter()) {
     get() { return state; },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     async flush() { clearTimeout(saveTimer); return adapter.save(state); },
+    /** 저장 실패 처리기 등록 (v1.3.0) — 반환값을 부르면 해제 */
+    onSaveError(fn) { saveErrorHandlers.add(fn); return () => saveErrorHandlers.delete(fn); },
+    /** 실패한 저장을 지금 다시 시도 (메모리의 현재 상태를 그대로 저장) */
+    async retrySave() { clearTimeout(saveTimer); return doSave(); },
 
     /* 회원 */
     members: {

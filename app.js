@@ -25,15 +25,15 @@ const { createStore, LocalStorageAdapter, ageOf, ageLabel, parseBirthYear,
   localDateStr, FORMATION_PRESETS, formationSlots,
   layoutFormation, buildOurPins, buildOppPins, SET_PIECE_TEMPLATES, QUICK_INSTRUCTION_PRESETS,
   DRILL_CATEGORIES, DRILL_CATEGORY_KEYS, WEAK_TAGS, trainingSessionDrillMinutes,
-  currentWeekMonday, weekLabel, weakestAbilities, BUILTIN_PLAYBOOKS } = STORE_NS;
+  currentWeekMonday, weekLabel, weakestAbilities, BUILTIN_PLAYBOOKS, FAULT_KEY } = STORE_NS;
 const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
-const { INVITE_CODE, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
-  currentSessionName, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
+const { INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
+  currentSessionName, currentSessionCode, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.2.0';
+export const APP_VERSION = 'v1.3.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -236,6 +236,7 @@ function initial(name) { return String(name || '?').trim().slice(-2); }
 /** 감독 뱃지 (팀 감독이면 표시) */
 let toastTimer;
 function toast(msg, kind = '') {
+  if (document.getElementById('fail-panel')) return;   // 실패 패널이 떠 있으면 토스트로 덮지 않는다 (v1.3.0)
   const wrap = $('#toasts');
   wrap.innerHTML = `<div class="toast ${kind}">${esc(msg)}</div>`;
   clearTimeout(toastTimer);
@@ -250,6 +251,64 @@ function toastUndo(msg, onUndo) {
   const finish = () => { wrap.innerHTML = ''; };
   btn.addEventListener('click', () => { clearTimeout(toastTimer); finish(); onUndo(); });
   toastTimer = setTimeout(finish, 5000);
+}
+
+/* ---------- 실패 패널 + FAULT 스위치 (v1.3.0) ----------
+ * 원칙: 쓰기 실패는 "무엇이 · 왜 · 다음 행동(다시 시도/닫기)"을 패널로 보여 준다. 토스트로 흘려보내지 않는다.
+ * FAULT 스위치: 설정 화면에서 켜면 다음 저장 1번이 일부러 실패하고 저절로 꺼진다 (store.js FAULT_KEY). */
+function faultOn() { try { return localStorage.getItem(FAULT_KEY) === '1'; } catch (e) { return false; } }
+function setFault(on) {
+  try { if (on) localStorage.setItem(FAULT_KEY, '1'); else localStorage.removeItem(FAULT_KEY); return true; }
+  catch (e) { return false; }
+}
+function failReason(e) {
+  const m = String(e?.message || e || '').trim();
+  if (/FAULT/.test(m)) return 'FAULT 스위치(테스트용 고의 실패)가 켜져 있었습니다. 스위치는 이제 꺼졌습니다.';
+  return m || '알 수 없는 오류입니다.';
+}
+function showFailPanel({ what, error, onRetry }) {
+  if (document.getElementById('fail-panel')) return;   // 이미 떠 있으면 첫 패널을 그대로 둔다
+  clearTimeout(toastTimer);
+  const tw = $('#toasts'); if (tw) tw.innerHTML = '';
+  const el = document.createElement('div');
+  el.id = 'fail-panel';
+  el.className = 'fail-panel';
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-labelledby', 'fail-title');
+  el.innerHTML = `<div class="fail-card">
+      <div class="fail-title" id="fail-title">${esc(what)}</div>
+      <div class="fail-why"><b>원인</b> <span id="fail-why">${esc(failReason(error))}</span></div>
+      <div class="fail-note">방금 바꾼 내용은 화면에는 보이지만 이 기기에 아직 저장되지 않았습니다. 앱을 닫기 전에 다시 시도해 주세요.</div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="btn grow" id="fail-close">닫기</button>
+        <button type="button" class="btn primary grow" id="fail-retry">다시 시도</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  const retry = el.querySelector('#fail-retry');
+  el.querySelector('#fail-close').addEventListener('click', () => el.remove());
+  retry.addEventListener('click', async () => {
+    retry.disabled = true; retry.textContent = '저장 중…';
+    try {
+      await onRetry();
+      el.remove();
+      toast('저장했습니다');
+    } catch (e2) {
+      el.querySelector('#fail-why').textContent = `다시 실패했습니다 — ${failReason(e2)}`;
+      retry.disabled = false; retry.textContent = '다시 시도';
+    }
+  });
+  retry.focus();
+}
+function faultSettingsCard() {
+  const on = faultOn();
+  return `<div class="section-title">실패 테스트</div>
+    <div class="card">
+      <div class="row"><button class="btn sm ${on ? 'danger' : ''}" id="btn-fault" aria-pressed="${on}">${on ? 'FAULT 켜짐 — 다음 저장 1번 실패' : 'FAULT 스위치 켜기'}</button></div>
+      <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-top:8px">
+        켜면 다음 저장 1번이 일부러 실패해 실패 안내가 제대로 뜨는지 확인할 수 있어요. 1번 실패하면 저절로 꺼집니다.
+      </div>
+    </div>`;
 }
 
 /* 모달: 뒤로가기로 닫힘 */
@@ -458,12 +517,14 @@ function aiAskModal() {
 /* ---------- 회원 초대 카드 (v1.2.0 베타) ---------- */
 function inviteSettingsCard() {
   const me = currentSessionName();
+  const myCode = currentSessionCode();   // v1.3.0: 원문은 저장소에 없다 — 이 기기에서 입력한 값만 보여 준다
   const exp = INVITE_EXPIRES_AT ? new Date(INVITE_EXPIRES_AT).toLocaleDateString('ko-KR') : '무제한';
   return `<div class="section-title">회원 초대 (베타)</div>
     <div class="card">
       <div class="field"><label>초대 코드</label>
-        <div class="keyrow"><code style="font-size:16px">${esc(INVITE_CODE)}</code>
-          <button class="btn sm" id="btn-invite-copy">복사</button></div>
+        ${myCode ? `<div class="keyrow"><code style="font-size:16px">${esc(myCode)}</code>
+          <button class="btn sm" id="btn-invite-copy">복사</button></div>`
+          : '<div style="font-size:13px;color:var(--text-2)">이 기기에 저장된 코드가 없습니다 — 사장님이 보관한 코드를 전달해 주세요.</div>'}
       </div>
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.6">
         회원에게 이 코드를 알려주면 이름 + 코드로 들어옵니다(비밀번호 없음). 만료: ${esc(exp)}.<br>
@@ -927,6 +988,7 @@ function renderOurTeam() {
     </div>
     ${inviteSettingsCard()}
     ${aiSettingsCard()}
+    ${faultSettingsCard()}
     <div class="footer-note">${esc(APP_NAME)} · <b>${APP_VERSION}</b> · <span id="sw-state">로컬 저장</span></div>`;
 
   root.innerHTML = html;
@@ -3554,8 +3616,15 @@ function bindEvents() {
       render();
     }
     if (t.closest('#btn-invite-copy')) {
-      navigator.clipboard?.writeText(INVITE_CODE).then(() => toast('코드를 복사했습니다'))
+      navigator.clipboard?.writeText(currentSessionCode()).then(() => toast('코드를 복사했습니다'))
         .catch(() => toast('복사 실패 — 직접 선택해 복사해 주세요', 'err'));
+      return;
+    }
+    if (t.closest('#btn-fault')) {
+      const next = !faultOn();
+      if (!setFault(next)) { toast('이 브라우저가 저장을 막아 FAULT 스위치를 바꿀 수 없습니다', 'err'); return; }
+      toast(next ? 'FAULT 켜짐 — 다음 저장 1번이 실패합니다' : 'FAULT 스위치를 껐습니다');
+      render();
       return;
     }
     if (t.closest('#btn-invite-logout')) {
@@ -3793,7 +3862,7 @@ function showModuleMismatch(bad) {
  * 회원 3명 베타 1단계: 이름+초대 코드만(비밀번호 없음), 통과하면 이 기기에 로그인 기록을 남긴다.
  * 백엔드가 없어 기기마다 저장이 분리되므로, 이 게이트는 "접근 차단"만 하고 데이터를 공유하지 않는다
  * (invite.js 상단 주석 참고). */
-function renderGate(errMsg) {
+function renderGate(errMsg, keepName = '') {
   const root = $('#gate-root');
   if (!root) return;
   document.querySelector('.app')?.setAttribute('style', 'display:none');
@@ -3804,37 +3873,45 @@ function renderGate(errMsg) {
         <div class="gate-title">${esc(APP_NAME)} <span class="badge-beta">베타</span></div>
         <div class="gate-sub">${esc(store?.club?.name?.() || '웃을산 FC')} 회원만 들어올 수 있어요</div>
         <div class="field"><label>이름</label>
-          <input type="text" id="gate-name" placeholder="예: 홍길동" maxlength="20" autocomplete="name"></div>
+          <input type="text" id="gate-name" placeholder="예: 홍길동" maxlength="20" autocomplete="name" value="${esc(keepName)}"></div>
         <div class="field"><label>초대 코드</label>
-          <input type="text" id="gate-code" placeholder="사장님께 받은 코드" autocomplete="off" autocapitalize="off"></div>
+          <input type="text" id="gate-code" placeholder="사장님께 받은 코드" autocomplete="off" autocapitalize="off">
+          <div class="hint" id="gate-hint">코드는 사장님(운영진)이 단톡방이나 메시지로 알려드려요. 한글+숫자 조합이고 띄어쓰기는 상관없어요.</div></div>
         ${errMsg ? `<div class="gate-err">${esc(errMsg)}</div>` : ''}
         <button class="btn primary block" id="gate-submit">들어가기</button>
       </div>
     </div>`;
-  const submit = () => {
+  let busy = false;
+  const submit = async () => {
+    if (busy) return;
     const name = $('#gate-name').value.trim();
     const code = $('#gate-code').value;
     if (!name) return renderGate('이름을 입력해 주세요');
-    const r = checkCode(code);
+    const again = (m) => { renderGate(m, name); $('#gate-code')?.focus(); };
+    busy = true;
+    const btn = $('#gate-submit'); btn.disabled = true; btn.textContent = '확인 중…';
+    const r = await checkCode(code);   // v1.3.0: 해시 비교(비동기)
     if (!r.ok) {
       const msg = r.reason === 'expired' ? '초대 코드 기간이 끝났습니다. 사장님께 문의해 주세요'
+        : r.reason === 'empty' ? '초대 코드를 입력해 주세요'
+        : r.reason === 'nocrypto' ? '이 브라우저에서는 코드를 확인할 수 없어요. 크롬이나 사파리로 열어 주세요'
         : '코드가 맞지 않습니다. 사장님께 다시 받아주세요';
-      return renderGate(msg);
+      return again(msg);
     }
-    writeSession(name);
+    writeSession(name, code);
     document.querySelector('.app')?.removeAttribute('style');
     root.innerHTML = '';
     startApp();
   };
   $('#gate-submit').addEventListener('click', submit);
-  root.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-  $('#gate-name').focus();
+  root.onkeydown = (e) => { if (e.key === 'Enter') submit(); };   // 다시 그려도 처리기가 쌓이지 않게 대입
+  if (!keepName) $('#gate-name').focus();
 }
 
 /* ================= 시작 ================= */
 async function main() {
   if (!checkModuleVersions()) return;   // 캐시가 섞였으면 복구 후 다시 시작한다
-  if (!sessionValid()) { renderGate(); return; }   // 로그인 안 됐거나 코드가 바뀌었으면 게이트부터
+  if (!await sessionValid()) { renderGate(); return; }   // 로그인 안 됐거나 코드가 바뀌었으면 게이트부터
   await startApp();
 }
 
@@ -3843,6 +3920,7 @@ async function startApp() {
   $('#topbar-sub').textContent = APP_VERSION;   // 화면 빌드 표식
   $$('.tabbar button').forEach((b) => { $('.ico', b).innerHTML = ICON[b.dataset.icon]; });
   await store.init();
+  store.onSaveError((e) => showFailPanel({ what: '변경 내용을 이 기기에 저장하지 못했습니다', error: e, onRetry: () => store.retrySave() }));
   bindEvents();
   render();
   applyHash();

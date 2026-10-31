@@ -1106,3 +1106,21 @@ a.btn { text-decoration: none; }
 .pastweek-row .dim { margin-left: auto; font-weight: 600; }
 
 .weak-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+/* 실패 패널 (v1.3.0) — 무엇이·왜·다시 시도/닫기 */
+.fail-panel {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+  display: flex; justify-content: center;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+}
+.fail-card {
+  width: 100%; max-width: 536px; background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-left: 5px solid var(--danger); border-radius: var(--r);
+  padding: 14px 14px 12px; box-shadow: var(--shadow-lg);
+}
+.fail-title { font-size: 15.5px; font-weight: 800; color: var(--danger); margin-bottom: 6px; }
+.fail-why { font-size: 13px; line-height: 1.6; color: var(--text); }
+.fail-why b { color: var(--text-2); margin-right: 4px; }
+.fail-note { font-size: 12.5px; line-height: 1.6; color: var(--text-2); margin-top: 6px; }
+.gate .field .hint { font-size: 12px; font-weight: 500; color: var(--text-2); margin-top: 6px; line-height: 1.5; }
