@@ -20,7 +20,7 @@ export const MODULE_VERSION = 'v1.3.1';
 /** 초대 코드 게이트 켜기/끄기 (v1.3.1). false = 게이트를 건너뛰고 바로 앱을 연다.
  *  배경: 백엔드가 없어 데이터는 기기별 localStorage — 게이트는 데이터를 지키지 못하고 입장 마찰만 만든다.
  *  값을 바꾸면 재배포해야 반영된다. */
-export const INVITE_ENABLED = true;
+export const INVITE_ENABLED = false; // 2026-11-01 사장님 결정: 공유 백엔드 전까지 게이트 끔(입장화면 멈춤 신고)
 
 /** 현재 유효한 초대 코드의 해시 (원문은 저장소에 두지 않는다 — 사장님이 보관·전달). */
 export const INVITE_CODE_HASH = '7d6c13cd1cb57b6fe00055e4617fd7a22ad92ae822df179bb08fcf9016267033';
