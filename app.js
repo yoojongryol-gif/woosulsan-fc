@@ -30,10 +30,10 @@ const { parseRoster, matchNames } = ROSTER_NS;
 const { currentEnv, bannerFor, androidChromeIntent, readMeta, writeMeta, needsBackup, sinceLabel,
   moduleFixPlan, MODULE_VERSION: ENV_VERSION } = ENV_NS;
 const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel } = DRAFTS_NS;
-const { INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
+const { INVITE_ENABLED, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
   currentSessionName, currentSessionCode, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.3.0';
+export const APP_VERSION = 'v1.3.1';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -266,8 +266,10 @@ function failReason(e) {
   if (/FAULT/.test(m)) return 'FAULT 스위치(테스트용 고의 실패)가 켜져 있었습니다. 스위치는 이제 꺼졌습니다.';
   return m || '알 수 없는 오류입니다.';
 }
+let failPanelQuietUntil = 0;   // v1.3.1: 닫기 후 60초는 패널 대신 토스트 — 저장이 계속 실패하는 기기에서 패널이 탭바를 매번 덮어 앱을 못 쓰게 되는 것을 막는다
 function showFailPanel({ what, error, onRetry }) {
   if (document.getElementById('fail-panel')) return;   // 이미 떠 있으면 첫 패널을 그대로 둔다
+  if (Date.now() < failPanelQuietUntil) { toast(`저장 실패 — ${failReason(error)}`, 'err'); return; }
   clearTimeout(toastTimer);
   const tw = $('#toasts'); if (tw) tw.innerHTML = '';
   const el = document.createElement('div');
@@ -286,7 +288,7 @@ function showFailPanel({ what, error, onRetry }) {
     </div>`;
   document.body.appendChild(el);
   const retry = el.querySelector('#fail-retry');
-  el.querySelector('#fail-close').addEventListener('click', () => el.remove());
+  el.querySelector('#fail-close').addEventListener('click', () => { el.remove(); failPanelQuietUntil = Date.now() + 60000; });
   retry.addEventListener('click', async () => {
     retry.disabled = true; retry.textContent = '저장 중…';
     try {
@@ -516,6 +518,7 @@ function aiAskModal() {
 
 /* ---------- 회원 초대 카드 (v1.2.0 베타) ---------- */
 function inviteSettingsCard() {
+  if (INVITE_ENABLED === false) return '';   // v1.3.1: 게이트를 끄면 초대 카드도 숨긴다
   const me = currentSessionName();
   const myCode = currentSessionCode();   // v1.3.0: 원문은 저장소에 없다 — 이 기기에서 입력한 값만 보여 준다
   const exp = INVITE_EXPIRES_AT ? new Date(INVITE_EXPIRES_AT).toLocaleDateString('ko-KR') : '무제한';
@@ -3911,7 +3914,8 @@ function renderGate(errMsg, keepName = '') {
 /* ================= 시작 ================= */
 async function main() {
   if (!checkModuleVersions()) return;   // 캐시가 섞였으면 복구 후 다시 시작한다
-  if (!await sessionValid()) { renderGate(); return; }   // 로그인 안 됐거나 코드가 바뀌었으면 게이트부터
+  // v1.3.1: INVITE_ENABLED=false 면 게이트 생략 (옛 invite.js 가 섞여 undefined 이면 켜진 것으로 본다)
+  if (INVITE_ENABLED !== false && !await sessionValid()) { renderGate(); return; }   // 로그인 안 됐거나 코드가 바뀌었으면 게이트부터
   await startApp();
 }
 

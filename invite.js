@@ -15,7 +15,12 @@
  * 사장님 기기에만 있다. 진짜 데이터 공유는 Firebase 같은 백엔드가 있어야 한다(아래 제안 참고).
  */
 
-export const MODULE_VERSION = 'v1.3.0';
+export const MODULE_VERSION = 'v1.3.1';
+
+/** 초대 코드 게이트 켜기/끄기 (v1.3.1). false = 게이트를 건너뛰고 바로 앱을 연다.
+ *  배경: 백엔드가 없어 데이터는 기기별 localStorage — 게이트는 데이터를 지키지 못하고 입장 마찰만 만든다.
+ *  값을 바꾸면 재배포해야 반영된다. */
+export const INVITE_ENABLED = true;
 
 /** 현재 유효한 초대 코드의 해시 (원문은 저장소에 두지 않는다 — 사장님이 보관·전달). */
 export const INVITE_CODE_HASH = '7d6c13cd1cb57b6fe00055e4617fd7a22ad92ae822df179bb08fcf9016267033';
@@ -31,14 +36,94 @@ export function normalizeCode(s) {
   return String(s == null ? '' : s).trim().replace(/\s+/g, '').normalize('NFC');
 }
 
-/** 입력 코드 → 해시(hex). 브라우저 WebCrypto(https·localhost)가 없으면 null */
+const toHex = (u8) => [...u8].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+/* ---- 순수 JS PBKDF2-HMAC-SHA256 (v1.3.1) ----
+ * WebCrypto(crypto.subtle)가 없거나 PBKDF2를 거부하는 환경(일부 인앱 브라우저·구형 WebView·비보안 접속)에서도
+ * 같은 해시를 만든다. v1.3.0은 이 경우 정답 코드도 거부하고 기존 로그인 기기까지 잠갔다. */
+const K256 = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+const IV256 = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+const W = new Uint32Array(64);
+function compress(H, words) {   // H: Uint32Array(8) 갱신, words: 16개 32비트 워드
+  for (let i = 0; i < 16; i++) W[i] = words[i];
+  for (let i = 16; i < 64; i++) {
+    const a = W[i - 15], b = W[i - 2];
+    const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+    const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
+    W[i] = (W[i - 16] + s0 + W[i - 7] + s1) | 0;
+  }
+  let [a, b, c, d, e, f, g, h] = H;
+  for (let i = 0; i < 64; i++) {
+    const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+    const t1 = (h + S1 + ((e & f) ^ (~e & g)) + K256[i] + W[i]) | 0;
+    const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+    const t2 = (S0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+    h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+  }
+  H[0] += a; H[1] += b; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+}
+function sha256Blocks(H, bytes, prefixLen) {   // 패딩 포함 전체 처리 (prefixLen = 앞서 처리한 바이트 수)
+  const total = prefixLen + bytes.length;
+  const n = Math.ceil((bytes.length + 9) / 64) * 64;
+  const buf = new Uint8Array(n); buf.set(bytes); buf[bytes.length] = 0x80;
+  const bits = total * 8;
+  buf[n - 4] = (bits >>> 24) & 255; buf[n - 3] = (bits >>> 16) & 255; buf[n - 2] = (bits >>> 8) & 255; buf[n - 1] = bits & 255;
+  buf[n - 5] = Math.floor(bits / 2 ** 32) & 255;
+  const w = new Uint32Array(16);
+  for (let o = 0; o < n; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (buf[o + i * 4] << 24) | (buf[o + i * 4 + 1] << 16) | (buf[o + i * 4 + 2] << 8) | buf[o + i * 4 + 3];
+    compress(H, w);
+  }
+}
+function wordsToBytes(H) {
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 8; i++) { out[i * 4] = H[i] >>> 24; out[i * 4 + 1] = H[i] >>> 16; out[i * 4 + 2] = H[i] >>> 8; out[i * 4 + 3] = H[i]; }
+  return out;
+}
+function sha256(bytes) { const H = new Uint32Array(IV256); sha256Blocks(H, bytes, 0); return wordsToBytes(H); }
+export function pbkdf2Sha256Js(passBytes, saltBytes, iter) {
+  let key = passBytes.length > 64 ? sha256(passBytes) : passBytes;
+  const k = new Uint8Array(64); k.set(key);
+  const ipad = new Uint32Array(16), opad = new Uint32Array(16);
+  for (let i = 0; i < 16; i++) {
+    const v = (k[i * 4] << 24) | (k[i * 4 + 1] << 16) | (k[i * 4 + 2] << 8) | k[i * 4 + 3];
+    ipad[i] = v ^ 0x36363636; opad[i] = v ^ 0x5c5c5c5c;
+  }
+  const Hi = new Uint32Array(IV256); compress(Hi, ipad);   // 키 블록 미리 처리
+  const Ho = new Uint32Array(IV256); compress(Ho, opad);
+  const hmac = (msg) => {
+    const a = new Uint32Array(Hi); sha256Blocks(a, msg, 64);
+    const b = new Uint32Array(Ho); sha256Blocks(b, wordsToBytes(a), 64);
+    return wordsToBytes(b);
+  };
+  const first = new Uint8Array(saltBytes.length + 4); first.set(saltBytes); first[first.length - 1] = 1;   // 블록 번호 1 (32바이트 출력)
+  let u = hmac(first); const t = u.slice();
+  for (let i = 1; i < iter; i++) { u = hmac(u); for (let j = 0; j < 32; j++) t[j] ^= u[j]; }
+  return t;
+}
+
+/** 입력 코드 → 해시(hex). WebCrypto 우선, 없거나 실패하면 순수 JS로 같은 값을 계산한다 (v1.3.1) */
 export async function hashCode(input) {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) return null;
   const enc = new TextEncoder();
-  const key = await subtle.importKey('raw', enc.encode(normalizeCode(input)), 'PBKDF2', false, ['deriveBits']);
-  const bits = await subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: enc.encode(HASH_SALT), iterations: HASH_ITER }, key, 256);
-  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const pass = enc.encode(normalizeCode(input));
+  const salt = enc.encode(HASH_SALT);
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    try {
+      const key = await subtle.importKey('raw', pass, 'PBKDF2', false, ['deriveBits']);
+      const bits = await subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: HASH_ITER }, key, 256);
+      return toHex(new Uint8Array(bits));
+    } catch (e) { console.warn('[invite] WebCrypto PBKDF2 실패 → 순수 JS로 계산', e); }
+  }
+  return toHex(pbkdf2Sha256Js(pass, salt, HASH_ITER));
 }
 
 export function isExpired(now = Date.now()) {
