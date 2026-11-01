@@ -329,7 +329,9 @@ main {
 .rate small { display: block; font-size: 10px; color: var(--text-3); font-weight: 700; }
 
 /* ---------- 전술 ---------- */
-.pitch-wrap { position: relative; border-radius: var(--r); overflow: hidden; background: #2f8f5b; touch-action: none; }
+.pitch-wrap { position: relative; border-radius: var(--r); overflow: hidden; background: #2f8f5b; touch-action: pan-y; }
+/* v1.3.2: 보드가 화면 폭을 거의 다 차지해 none 이면 잔디를 쓸어도 화면이 안 내려가 아래쪽 우리 선수(골키퍼·수비)가 탭바 밑에 갇혔다.
+ * 잔디는 세로 스크롤만 허용하고, 핀·공(.pin/.ball-marker = none)에서 시작한 터치는 지금처럼 드래그로 처리된다. 경기 모드(.live-pitch)는 none 유지. */
 .pitch-wrap svg.pitch { display: block; width: 100%; height: auto; }
 .pin {
   position: absolute; transform: translate(-50%, -50%);

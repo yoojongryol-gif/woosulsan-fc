@@ -33,7 +33,7 @@ const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel }
 const { INVITE_ENABLED, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
   currentSessionName, currentSessionCode, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.3.1';
+export const APP_VERSION = 'v1.3.2';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
