@@ -975,7 +975,7 @@ a.btn { text-decoration: none; }
 }
 .pin.us .dot { background: var(--t-b); }
 .pin.us .dot.gk { background: #f2b705; }
-.pin.us.empty .dot { background: color-mix(in srgb, var(--t-b) 55%, transparent); }
+.pin.us.vacant .dot { background: color-mix(in srgb, var(--t-b) 55%, transparent); }
 .pin.opp { pointer-events: auto; }
 .pin .dot.ghost {
   background: transparent; border: 2px dashed rgba(255,255,255,.85); color: #fff;

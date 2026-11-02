@@ -15,7 +15,7 @@
  * 사장님 기기에만 있다. 진짜 데이터 공유는 Firebase 같은 백엔드가 있어야 한다(아래 제안 참고).
  */
 
-export const MODULE_VERSION = 'v1.3.2';
+export const MODULE_VERSION = 'v1.3.3';
 
 /** 초대 코드 게이트 켜기/끄기 (v1.3.1). false = 게이트를 건너뛰고 바로 앱을 연다.
  *  배경: 백엔드가 없어 데이터는 기기별 localStorage — 게이트는 데이터를 지키지 못하고 입장 마찰만 만든다.

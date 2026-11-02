@@ -33,7 +33,7 @@ const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel }
 const { INVITE_ENABLED, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
   currentSessionName, currentSessionCode, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.3.2';
+export const APP_VERSION = 'v1.3.3';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -1156,7 +1156,7 @@ function pinDotHTML(label, opts = {}) {
 function ourPinHTML(p, i) {
   const label = p.gk ? 'GK' : String(i);
   const name = p.name ? p.name.slice(0, 5) : (p.memberId ? '' : '공석');
-  return `<div class="pin us${p.memberId ? '' : ' empty'}" data-side="us" data-idx="${i}" style="left:${p.x}%;top:${p.y}%">
+  return `<div class="pin us${p.memberId ? '' : ' vacant'}" data-side="us" data-idx="${i}" style="left:${p.x}%;top:${p.y}%">
     ${pinDotHTML(label, { gk: p.gk })}
     <div class="lbl">${esc(name)}</div>
   </div>`;
@@ -1310,6 +1310,7 @@ function renderBoardPrep(root, matches) {
           <button type="button" class="btn grow" id="bd-playbook-open">기본 전술 불러오기</button>
           <button type="button" class="btn grow ghost" id="bd-playbook-save">내 전술로 저장</button>
         </div>
+        ${bd.mode === 'move' ? '<div class="cand-hint" style="margin:0 0 6px">우리 선수 핀을 누르면 선수를 지정하고, 끌면 자리를 옮깁니다</div>' : ''}
         <div class="pitch-wrap" id="bd-pitch">
           ${boardPitchSVG()}
           <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
@@ -1380,7 +1381,15 @@ function bindBoardPointer() {
 
     // 경기 모드 · 교체 모드 — 우리 핀을 탭하면 드래그 없이 바로 교체 시트를 연다
     if (bd.viewMode === 'live' && bd.mode === 'sub') {
-      if (pin && pin.dataset.side === 'us') substituteSheet(Number(pin.dataset.idx));
+      // v1.3.3: 누르는 순간 열면 뒤따르는 click 이 시트 배경을 눌러 바로 닫혔다(터치 실측) — 손을 뗄 때 연다
+      if (pin && pin.dataset.side === 'us') {
+        const idx = Number(pin.dataset.idx);
+        pin.setPointerCapture?.(e.pointerId);
+        const open = () => { pin.removeEventListener('pointercancel', drop); swallowNextClick(); substituteSheet(idx); };
+        const drop = () => pin.removeEventListener('pointerup', open);
+        pin.addEventListener('pointerup', open, { once: true });
+        pin.addEventListener('pointercancel', drop, { once: true });
+      }
       return;
     }
 
@@ -1411,8 +1420,13 @@ function bindBoardPointer() {
     if (bd.viewMode === 'live') return;   // 안전장치 — 경기 모드에는 자유 이동(드래그) 모드가 없다
 
     // 이동 모드(준비 모드 전용) — 핀/공 드래그
+    // v1.3.3: 손가락이 8px 안에서 떨어지면 드래그가 아니라 "탭" — 핀을 밀지 않고 선수 지정으로 넘긴다
+    const start = { x: e.clientX, y: e.clientY };
+    let moved = false;
     target.classList.add('dragging');
     const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) return;
+      moved = true;
       const p = pct(ev);
       if (ball) { bd.ball = { x: p.x, y: p.y }; }
       else {
@@ -1421,16 +1435,30 @@ function bindBoardPointer() {
       }
       target.style.left = p.x + '%'; target.style.top = p.y + '%';
     };
-    const up = () => {
+    const finish = () => {
       target.classList.remove('dragging');
       target.removeEventListener('pointermove', move);
       target.removeEventListener('pointerup', up);
-      target.removeEventListener('pointercancel', up);
-      bd.dirty = true;
+      target.removeEventListener('pointercancel', finish);
+      if (moved) bd.dirty = true;
+    };
+    const up = () => {
+      finish();
+      if (moved || !pin || pin.dataset.side !== 'us') return;
+      // click 이 아니라 여기서 처리한다: iOS 는 div 탭의 click 을 document 위임 처리기까지 보내지 않을 수 있다
+      swallowNextClick();   // 곧 뒤따를 click 이 방금 연 시트의 배경을 눌러 닫지 않게
+      const idx = Number(pin.dataset.idx);
+      if (bd.pendingCand) {
+        const picked = bd.pendingCand;
+        bd.pendingCand = null;
+        assignCandidateToSlot(picked, idx);
+      } else {
+        pinNameSheet(idx);
+      }
     };
     target.addEventListener('pointermove', move);
     target.addEventListener('pointerup', up);
-    target.addEventListener('pointercancel', up);
+    target.addEventListener('pointercancel', finish);
   });
 
   // 경기 모드 — 잠금 버튼: 짧게 누르면 잠기고, 잠긴 상태에서는 길게(600ms) 눌러야 풀린다
@@ -1471,15 +1499,20 @@ function bindBoardPointer() {
       overIdx = pin ? Number(pin.dataset.idx) : -1;
       if (pin) pin.classList.add('drop-target');
     };
-    const up = (ev) => {
+    const finish = () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', finish);
       ghost.remove();
       $$('.pin.us.drop-target').forEach((n) => n.classList.remove('drop-target'));
+    };
+    const up = () => {
+      finish();
       if (overIdx >= 0) assignCandidateToSlot(memberId, overIdx);
     };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', finish);
   });
 }
 
@@ -1504,6 +1537,50 @@ function assignCandidateToSlot(memberId, i) {
   bd.dirty = true;
   renderBoard();
   toast(`${mem.name} 배치`);
+}
+
+/** 방금 처리한 탭에 뒤따르는 click 1번을 삼킨다(없으면 400ms 뒤 저절로 해제) */
+function swallowNextClick() {
+  const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); clear(); };
+  const clear = () => { document.removeEventListener('click', stop, true); clearTimeout(timer); };
+  const timer = setTimeout(clear, 400);
+  document.addEventListener('click', stop, true);
+}
+
+/** v1.3.3: 준비 모드에서 우리 핀을 탭하면 그 자리에 넣을 선수를 고른다. 오늘 가능 선수를 먼저 보여 준다 */
+function pinNameSheet(i) {
+  const pin = bd.ourPins[i];
+  if (!pin) return;
+  const today = new Set(availableToday().map((m) => m.id));
+  const members = store.members.active().slice().sort((a, b) => today.has(b.id) - today.has(a.id));
+  const placedAt = new Map(bd.ourPins.map((p, idx) => [p.memberId, idx]));
+  const slotLabel = (idx) => (bd.ourPins[idx].gk ? 'GK' : `${idx}번`);
+  openModal(`
+    <h3>${esc(slotLabel(i))} 자리 선수 지정${pin.name ? ` · 지금 ${esc(pin.name)}` : ''}</h3>
+    <div class="sub-cand-list">${members.length ? members.map((m) => `
+        <button type="button" class="btn block sub-cand-btn" data-pick-member="${m.id}">${esc(m.name)}${placedAt.has(m.id) ? ` <span class="dim">· ${esc(slotLabel(placedAt.get(m.id)))} 자리</span>` : ''}</button>`).join('')
+      : '<div class="dim" style="padding:8px 0">지정할 회원이 없습니다. 우리팀 탭에서 회원을 먼저 추가하세요.</div>'}</div>
+    <div class="foot">
+      ${pin.memberId ? '<button class="btn ghost" data-pick-clear="1">이 자리 비우기</button>' : ''}
+      ${members.length ? '' : '<button class="btn primary" data-act="go-team">우리팀 탭으로</button>'}
+      <button class="btn ghost" data-act="cancel">닫기</button>
+    </div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="cancel"]')) return closeModal();
+      if (e.target.closest('[data-act="go-team"]')) return afterModalClose(() => switchTab('ourteam'));
+      if (e.target.closest('[data-pick-clear]')) {
+        closeModal();
+        bd.ourPins[i] = { ...bd.ourPins[i], memberId: null, name: '' };
+        bd.dirty = true;
+        toast('자리를 비웠습니다');
+        return renderBoard();
+      }
+      const btn = e.target.closest('[data-pick-member]');
+      if (!btn) return;
+      closeModal();
+      assignCandidateToSlot(btn.dataset.pickMember, i);
+    });
+  });
 }
 
 function boardSnapshotFromState() {
@@ -3568,7 +3645,9 @@ function bindEvents() {
       if (bd.pendingCand === cand.dataset.cand) { bd.pendingCand = null; return renderBoard(); }
       bd.pendingCand = cand.dataset.cand;
       toast('보드에서 넣을 자리를 눌러 주세요');
-      return renderBoard();
+      renderBoard();
+      $('#bd-pitch')?.scrollIntoView({ block: 'center', behavior: 'smooth' });   // v1.3.3: 후보는 맨 아래, 잔디는 위 — 폰에서 자리가 안 보이던 문제
+      return;
     }
     const slotPin = t.closest('#bd-pins .pin.us');
     if (slotPin && bd.pendingCand) {
