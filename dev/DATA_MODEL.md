@@ -190,6 +190,15 @@ AI 설정은 `state` 에 **넣지 않는다**. localStorage 의 **다른 키**(`
 - 컨텍스트로는 회원(이름·실력·포지션·출석률)과 경기 요약만 보낸다. 연락처 등 민감 필드가 생기면 `memberBrief()` 에서 제외할 것.
 - v1.0 에서 내부 팀 나누기 프롬프트(`teamCoachPrompt`)는 기능과 함께 제거. S5 에서 "상대 카드 + 우리 라인업" 코치로 다시 들어온다.
 
+
+## 4.5b 화면 설정 (v1.4.0) — **앱 데이터와 분리 저장**
+
+`state` 스키마와 무관한 기기별 화면 상태. localStorage `woosulsan-fc:ui`, JSON 내보내기에 포함되지 않는다.
+
+```jsonc
+{ "oppShow": { "<matchId 또는 __temp__>": true }, "stripHiddenUntil": 1730000000000, "boardHintSeen": true }
+```
+
 ## 5. 마이그레이션 규칙 (store.js `migrate()`)
 
 ### 5-1. schema 2 → 3 (v0.7 → v1.0) — **데이터 손실 0 이 조건**

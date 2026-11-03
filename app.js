@@ -33,7 +33,7 @@ const { saveDraft, readDraft, clearDraft, hasAnyDraft, debounce, draftAgeLabel }
 const { INVITE_ENABLED, INVITE_EXPIRES_AT, checkCode, sessionValid, writeSession, clearSession,
   currentSessionName, currentSessionCode, MODULE_VERSION: INVITE_VERSION } = INVITE_NS;
 
-export const APP_VERSION = 'v1.3.3';
+export const APP_VERSION = 'v1.4.0';
 /** 앱 이름 (2026-09-22 사장님 지시). 클럽 이름(store.club.name)과는 다른 값이다. */
 export const APP_NAME = '축구&joy';
 
@@ -52,6 +52,18 @@ const ui = {
   trainSub: 'team',      // 훈련 탭 하위 — 'team' | 'personal' (S5)
   drillLibScope: 'all',  // 드릴 라이브러리 필터 — 'all' | 'team' | 'solo' (S6)
 };
+
+/* v1.4.0: 기기별 화면 설정(상대 보기·안내 띠 숨김 등). meta·ai 설정처럼 앱 데이터(woosulsan-fc:v1)와 분리된
+ * localStorage 키라 저장 구조·백업 파일에 섞이지 않는다. 저장이 막힌 브라우저에서도 이번 실행 동안은 동작한다. */
+const UI_PREFS_KEY = 'woosulsan-fc:ui';
+const prefs = (() => {
+  try { const j = JSON.parse(localStorage.getItem(UI_PREFS_KEY) || '{}'); return j && typeof j === 'object' ? j : {}; }
+  catch (e) { return {}; }
+})();
+function writePrefs(patch) {
+  Object.assign(prefs, patch);
+  try { localStorage.setItem(UI_PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* 이번 실행 동안만 유지 */ }
+}
 
 /* ================= 유틸 ================= */
 function esc(s) {
@@ -315,9 +327,9 @@ function faultSettingsCard() {
 
 /* 모달: 뒤로가기로 닫힘 */
 const modalStack = [];
-function openModal(html, onMount) {
+function openModal(html, onMount, { cls = '', noFocus = false } = {}) {
   const back = document.createElement('div');
-  back.className = 'modal-back';
+  back.className = `modal-back${cls ? ` ${cls}` : ''}`;
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
   back.addEventListener('click', (e) => { if (e.target === back) closeModal(); });
   document.body.appendChild(back);
@@ -326,7 +338,7 @@ function openModal(html, onMount) {
   history.pushState({ modal: modalStack.length }, '');
   onMount?.($('.modal', back), back);
   const firstInput = $('input:not([type=file]), textarea', back);
-  if (firstInput && !('ontouchstart' in window)) setTimeout(() => firstInput.focus(), 60);
+  if (firstInput && !noFocus && !('ontouchstart' in window)) setTimeout(() => firstInput.focus(), 60);
   return back;
 }
 /* 우리가 부른 history.back() 으로 생길 popstate 개수.
@@ -415,7 +427,7 @@ function aiKeyNotice(extra = '') {
   return `<div class="ai-card notice">
     <div class="t">AI 기능을 쓰려면 API 키가 필요합니다</div>
     <div class="s">회원 탭 → 맨 아래 <b>AI 설정</b>에서 Anthropic API 키를 한 번만 넣어 주세요. 키는 이 기기에만 저장됩니다.${extra}</div>
-    <button class="btn sm" data-go="members">설정으로 이동</button>
+    <button class="btn sm" data-settings>설정으로 이동</button>
   </div>`;
 }
 function aiSkeleton(label) {
@@ -578,38 +590,50 @@ function render() {
 }
 
 /* ---------- 실행 환경 안내 (v0.5.3) ---------- */
-function envBanner() {
-  const env = currentEnv();
-  const meta = readMeta();
-  const b = bannerFor(env, store.members.all().length, Date.now(), meta.bannerHiddenUntil);
-  if (!b) return '';
-  const actionBtn = {
+const STRIP_HIDE_MS = 7 * 24 * 60 * 60 * 1000;
+function stripEnvBanner() { return bannerFor(currentEnv(), store.members.all().length, Date.now(), 0); }
+function stripNeedsBackup() { return needsBackup(store.members.all().length, readMeta().lastBackupAt); }
+
+/** v1.4.0: 저장 위치·백업 안내를 상단 작은 띠 1개로 합친다. 눌러서 자세히, ✕ 는 7일 숨김 */
+function topStrip() {
+  if (Date.now() < Number(prefs.stripHiddenUntil || 0)) return '';
+  const b = stripEnvBanner();
+  const backup = stripNeedsBackup();
+  if (!b && !backup) return '';
+  const text = [b?.title, backup ? '백업해 두세요' : ''].filter(Boolean).join(' · ');
+  return `<div class="topstrip ${b?.type === 'inapp' ? 'warn' : ''}">
+    <button type="button" class="ts-main" id="btn-strip-open"><span class="ts-text">${esc(text)}</span><span class="ts-more">자세히</span></button>
+    <button type="button" class="ts-x" id="btn-strip-close" aria-label="7일 동안 숨기기">✕</button>
+  </div>`;
+}
+
+function stripSheet() {
+  const b = stripEnvBanner();
+  const backup = stripNeedsBackup();
+  const actionBtn = b ? {
     'android-open': `<a class="btn sm primary" href="${androidChromeIntent(location.href)}">크롬으로 열기</a>`,
     'ios-open': '<button class="btn sm primary" data-envhelp="ios-open">여는 방법</button>',
     'ios-add': '<button class="btn sm primary" data-envhelp="ios-add">홈 화면에 추가</button>',
     'android-add': '<button class="btn sm primary" data-envhelp="android-add">홈 화면에 추가</button>',
-  }[b.action] || '';
-  return `<div class="envbanner ${b.type}">
-    <div class="eb-top"><b>${esc(b.title)}</b>
-      <button class="eb-x" data-envclose aria-label="하루 동안 숨기기">✕</button></div>
-    <div class="eb-body">${esc(b.body)}</div>
-    <div class="row" style="margin-top:8px">${actionBtn}
-      <button class="btn sm" data-go="members">이 앱이 열린 곳 보기</button></div>
-  </div>`;
-}
-
-function backupCard() {
-  const meta = readMeta();
+  }[b.action] || '' : '';
   const n = store.members.all().length;
-  if (!needsBackup(n, meta.lastBackupAt)) return '';
-  return `<div class="backupcard">
-    <div class="bc-top"><b>백업해 두세요</b><span class="dim">마지막 백업 ${esc(sinceLabel(meta.lastBackupAt))}</span></div>
-    <div class="bc-body">회원 ${n}명·경기 기록이 이 기기에만 있습니다. JSON 파일로 내려받아 두면 기기를 바꿔도 그대로 옮길 수 있습니다.</div>
-    <div class="row" style="margin-top:8px">
-      <button class="btn sm primary" id="btn-backup-now">지금 백업</button>
-      <button class="btn sm" data-backup-later>나중에</button>
-    </div>
-  </div>`;
+  openModal(`
+    <h3>안내</h3>
+    ${b ? `<div class="envbanner ${b.type}">
+      <div class="eb-top"><b>${esc(b.title)}</b></div>
+      <div class="eb-body">${esc(b.body)}</div>
+      <div class="row" style="margin-top:8px">${actionBtn}<button class="btn sm" data-settings>이 앱이 열린 곳 보기</button></div>
+    </div>` : ''}
+    ${backup ? `<div class="backupcard">
+      <div class="bc-top"><b>백업해 두세요</b><span class="dim">마지막 백업 ${esc(sinceLabel(readMeta().lastBackupAt))}</span></div>
+      <div class="bc-body">회원 ${n}명·경기 기록이 이 기기에만 있습니다. JSON 파일로 내려받아 두면 기기를 바꿔도 그대로 옮길 수 있습니다.</div>
+      <div class="row" style="margin-top:8px"><button class="btn sm primary" id="btn-backup-now">지금 백업</button></div>
+    </div>` : ''}
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="close"], #btn-backup-now, [data-settings]')) closeModal();
+    });
+  });
 }
 
 /** 설정용: 이 앱이 열린 곳 */
@@ -807,10 +831,6 @@ function testRecOf(member, abilKey) {
 }
 
 const WEEKDAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
-function todayHead() {
-  const d = new Date();
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAY_KO[d.getDay()]})`;
-}
 /** "YYYY-MM-DD" → "9월 29일(화)" (경기·상대 화면 공용) */
 function fmtDate(dstr) {
   const d = new Date(`${dstr}T00:00:00`);
@@ -862,6 +882,14 @@ function chip(label, n, key) {
   return `<button data-mf="${key}" aria-pressed="${ui.memberFilter === key}">${esc(label)} ${n}</button>`;
 }
 
+const ATT_LABEL = { in: '참석', out: '불참', maybe: '미정' };
+/** 미정(미응답 포함) → 참석 → 불참 → 미정. 저장 값은 그대로 in/out/maybe */
+function attNext(v) { return v === 'in' ? 'out' : v === 'out' ? 'maybe' : 'in'; }
+function attAria(name, v) { return `${name} 출석 ${ATT_LABEL[v] || '미정'}. 누르면 ${ATT_LABEL[attNext(v)]}`; }
+function attBtnHTML(m, v) {
+  return `<button type="button" class="att-btn ${ATT_LABEL[v] ? v : 'none'}" data-att-member="${m.id}" aria-label="${esc(attAria(m.name, v))}">${ATT_LABEL[v] || '미정'}</button>`;
+}
+
 function memberRow(m, g) {
   const st = store.stats.attendance(m.id);
   const v = attOf(g, m.id);
@@ -874,18 +902,16 @@ function memberRow(m, g) {
         <div class="sub"><span class="chip pos">${esc(m.pos)}</span>${m.gk && m.pos !== 'GK' ? '<span class="chip gk">GK 가능</span>' : ''}${m.gender ? `<span class="chip g${m.gender === '여' ? 'f' : 'm'}">${m.gender}</span>` : ''}${avg == null ? '<span class="chip">미평가</span>' : `${stars(m.skill)}<span class="skillnum">${skillLabel(m)}</span>`}${st.rate != null ? `<span class="rate-mini">출석 ${st.rate}%</span>` : ''}</div>
       </div>
     </button>
-    <div class="seg" data-member="${m.id}">
-      <button class="in" data-v="in" aria-pressed="${v === 'in'}">참석</button>
-      <button class="out" data-v="out" aria-pressed="${v === 'out'}">불참</button>
-      <button class="maybe" data-v="maybe" aria-pressed="${v === 'maybe'}">미정</button>
-    </div>
+    ${attBtnHTML(m, v)}
   </div>`;
 }
 
-/** "가능 8명 · GK 없음" — 출석을 누를 때마다 이 한 줄만 다시 칠한다 */
-function availLabel(avail) {
-  const gk = avail.some((m) => m.gk || m.pos === 'GK');
-  return `가능 <i>${avail.length}</i>명${avail.length && !gk ? ' · <em>GK 없음</em>' : ''}`;
+function attSummaryHTML(c) {
+  return `참석 <i data-c="in">${c.in}</i> · 불참 <i data-c="out">${c.out}</i> · 미정 <i data-c="undecided">${c.maybe + c.none}</i>`;
+}
+/** 참석자가 있는데 GK 가 없을 때만 경고 */
+function attGkWarn(avail) {
+  return avail.length && !avail.some((m) => m.gk || m.pos === 'GK') ? 'GK 없음' : '';
 }
 
 function renderOurTeam() {
@@ -912,33 +938,19 @@ function renderOurTeam() {
       ? ((a.birthYear || 9999) - (b.birthYear || 9999)) || a.name.localeCompare(b.name, 'ko')
       : a.name.localeCompare(b.name, 'ko')));
 
-  // v1.0 안내 카드가 떠 있으면 "백업해 두세요" 는 같은 말을 두 번 하는 셈이라 접는다
-  const legacy = legacyCard();
-  let html = legacy + envBanner() + (legacy ? '' : backupCard());
+  let html = legacyCard() + topStrip();
 
+  const dNow = new Date();
   html += `<div class="todaycard">
-    <div class="tc-top"><b>오늘 ${esc(todayHead())}</b>
-      <span class="tc-avail">${availLabel(avail)}</span></div>
-    <div class="count-strip">
-      <div class="c in"><b>${counts.in}</b><span>참석</span></div>
-      <div class="c out"><b>${counts.out}</b><span>불참</span></div>
-      <div class="c"><b>${counts.maybe}</b><span>미정</span></div>
-      <div class="c"><b>${counts.none}</b><span>미응답</span></div>
-    </div>
-    <div class="row" style="margin-top:9px">
+    <div class="tc-summary"><b>오늘 ${dNow.getMonth() + 1}/${dNow.getDate()}(${WEEKDAY_KO[dNow.getDay()]})</b>
+      <span class="tc-counts">${attSummaryHTML(counts)}</span><em class="tc-gk">${attGkWarn(avail)}</em></div>
+    <div class="row tc-actions">
       <button class="btn sm grow" data-att-all="in">전체 참석</button>
       <button class="btn sm grow" data-att-all="clear">초기화</button>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <button class="btn sm block grow paste" id="btn-roster">${ICON.paste} 카톡 명단 붙여넣기</button>
+      <button class="btn sm grow paste" id="btn-roster">${ICON.paste} 카톡 명단</button>
     </div>
     ${ui.rosterDone ? `<div class="tc-done">명단 적용 완료 · 참석 ${ui.rosterDone.inCount}${ui.rosterDone.added ? ` (신규 ${ui.rosterDone.added})` : ''} · 불참 ${ui.rosterDone.outCount}</div>` : ''}
   </div>`;
-
-  html += `<div class="row" style="margin:12px 0 10px">
-      <button class="btn primary grow" id="btn-add-member">${ICON.plus} 회원 추가</button>
-      <button class="btn grow" id="btn-bulk-member">일괄 추가</button>
-    </div>`;
 
   const fixRows = nameCandidates();
   if (fixRows.length) {
@@ -949,7 +961,10 @@ function renderOurTeam() {
     </div>`;
   }
 
-  html += `<div class="search-wrap">${ICON.search}<input id="member-q" type="search" placeholder="이름 검색" value="${esc(q)}"></div>
+  html += `<div class="member-tools">
+      <div class="search-wrap">${ICON.search}<input id="member-q" type="search" placeholder="이름 검색" value="${esc(q)}"></div>
+      <button class="btn primary" id="btn-add-menu">${ICON.plus} 추가</button>
+    </div>
     <div class="filterchips">
       ${chip('전체', active.length, 'all')}
       ${chip('오늘 가능', avail.length, 'today')}
@@ -964,13 +979,18 @@ function renderOurTeam() {
   if (!list.length) {
     html += `<div class="empty">${ICON.member}
       <div class="big">${all.length ? '해당하는 회원이 없습니다' : '회원이 없습니다'}</div>
-      <div>${all.length ? '필터를 "전체"로 바꿔 보세요.' : '"일괄 추가"로 이름을 줄바꿈으로 붙여넣으면 한 번에 등록됩니다.'}</div></div>`;
+      <div>${all.length ? '필터를 "전체"로 바꿔 보세요.' : '"추가" 버튼의 일괄 추가로 이름을 줄바꿈으로 붙여넣으면 한 번에 등록됩니다.'}</div></div>`;
   } else {
     html += list.map((m) => memberRow(m, g)).join('');
   }
 
-  html += `<div id="settings-anchor"></div>
-    ${envCard()}
+  root.innerHTML = html;
+  refreshSettingsScreen();
+}
+
+/** v1.4.0: ⚙ 설정 화면(탭이 아닌 별도 화면). 내용은 우리팀 탭 맨 아래에 있던 것 그대로다 */
+function settingsBodyHTML() {
+  return `${envCard()}
     <div class="section-title">설정 · 백업</div>
     <div class="card">
       <div class="row" style="margin-bottom:8px">
@@ -993,21 +1013,50 @@ function renderOurTeam() {
     ${aiSettingsCard()}
     ${faultSettingsCard()}
     <div class="footer-note">${esc(APP_NAME)} · <b>${APP_VERSION}</b> · <span id="sw-state">로컬 저장</span></div>`;
+}
+function refreshSettingsScreen() {
+  const box = $('#settings-body');
+  if (!box) return;
+  const scroller = box.closest('.modal');
+  const top = scroller.scrollTop;
+  box.innerHTML = settingsBodyHTML();
+  scroller.scrollTop = top;
+}
+function settingsScreen() {
+  if ($('#settings-body')) return;
+  openModal(`
+    <div class="screen-head">
+      <button type="button" class="topbtn" data-act="close" aria-label="설정 닫기">←</button>
+      <h3>설정</h3>
+    </div>
+    <div id="settings-body">${settingsBodyHTML()}</div>`, (m) => {
+    m.addEventListener('click', (e) => { if (e.target.closest('[data-act="close"]')) closeModal(); });
+  }, { cls: 'screen', noFocus: true });
+}
 
-  root.innerHTML = html;
+/** "추가" 버튼 메뉴 — 한 명 추가 / 일괄 추가 */
+function addMemberMenu() {
+  openModal(`
+    <h3>회원 추가</h3>
+    <button class="btn primary block" data-add="one" style="margin-bottom:8px">${ICON.plus} 한 명 추가</button>
+    <button class="btn block" data-add="bulk">일괄 추가 (이름 여러 명 붙여넣기)</button>
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="close"]')) return closeModal();
+      const a = e.target.closest('[data-add]');
+      if (a) afterModalClose(() => (a.dataset.add === 'one' ? memberModal(null) : bulkModal()));
+    });
+  });
 }
 
 /** 출석만 다시 칠한다 (목록 전체를 다시 그리면 스크롤이 튄다) */
 function updateAttendCounts() {
   const c = countAttendance(todaySession());
-  const strip = $('#view-ourteam .count-strip');
-  if (strip) {
-    const cells = $$('.c b', strip);
-    [c.in, c.out, c.maybe, c.none].forEach((n, i) => { if (cells[i]) cells[i].textContent = String(n); });
-  }
+  const box = $('#view-ourteam .tc-counts');
+  if (box) box.innerHTML = attSummaryHTML(c);
   const avail = availableToday();
-  const box = $('#view-ourteam .tc-avail');
-  if (box) box.innerHTML = availLabel(avail);   // GK 경고까지 함께 갱신 (묵은 경고가 남지 않게)
+  const gk = $('#view-ourteam .tc-gk');
+  if (gk) gk.textContent = attGkWarn(avail);   // GK 경고까지 함께 갱신 (묵은 경고가 남지 않게)
   const chipToday = $('#view-ourteam .filterchips [data-mf="today"]');
   if (chipToday) chipToday.textContent = `오늘 가능 ${avail.length}`;
 }
@@ -1029,7 +1078,6 @@ const bd = {
   setPiece: null,
   mode: 'move',            // 'move' | 'arrow' | 'sub'(경기 모드 전용 — 핀 탭 = 교체)
   arrowStyle: 'solid',
-  panelOpen: false,         // 폰(세로)에서 후보 패널 펼침 여부
   pendingCand: null,         // 드래그 미지원 환경 대비 — 탭으로 고른 후보 선수 id
   loadedFrom: null,           // 마지막으로 불러온 matchId+snapshot 여부(경기 바뀔 때만 다시 채움)
   dirty: false,
@@ -1040,6 +1088,16 @@ const bd = {
 };
 
 function boardMatches() { return store.matches.sorted(); }
+
+/* v1.4.0 상대 보기: 기본 숨김, 켠 상태만 경기별로 이 기기에 기억한다(임시 라인업은 한 칸).
+ * 보이는 것만 바뀌고 oppPins 자체는 저장 데이터에 그대로 남는다. */
+function oppViewKey() { return bd.matchId || '__temp__'; }
+function oppVisible() { return !!prefs.oppShow?.[oppViewKey()]; }
+function setOppVisible(on) {
+  const next = { ...(prefs.oppShow || {}) };
+  if (on) next[oppViewKey()] = true; else delete next[oppViewKey()];
+  writePrefs({ oppShow: next });
+}
 
 /** 경기를 고르면 그 경기의 라인업/상대/저장된 스냅샷으로 보드를 채운다. 임시 라인업이면 오늘 가능 선수로 기본 배치 */
 function loadBoardFor(matchId) {
@@ -1166,6 +1224,9 @@ function oppPinHTML(p, i) {
     ${pinDotHTML(p.pos, { ghost: true })}
   </div>`;
 }
+function boardPinsHTML() {
+  return `${oppVisible() ? bd.oppPins.map(oppPinHTML).join('') : ''}${bd.ourPins.map(ourPinHTML).join('')}${ballHTML()}`;
+}
 function ballHTML() {
   if (!bd.ball) return '';
   return `<div class="ball-marker" data-ball style="left:${bd.ball.x}%;top:${bd.ball.y}%">⚽</div>`;
@@ -1205,7 +1266,7 @@ function boardCandPanelHTML() {
   return `
     <div class="board-panel-sec">
       <div class="section-title" style="margin-top:0">라인업 후보 <span class="count">${cands.length}</span></div>
-      <div class="cand-hint">선수를 눌러 고른 뒤 보드의 자리를 누르면 배치됩니다</div>
+      <div class="cand-hint">선수를 누른 뒤 보드의 자리를 누르거나, 자리로 끌어다 놓으세요</div>
       <div class="cand-list">${cands.length ? cands.map((m) => `
         <button type="button" class="cand-chip${placed.has(m.id) ? ' placed' : ''}${bd.pendingCand === m.id ? ' picking' : ''}"
           data-cand="${m.id}">${esc(m.name)}${placed.has(m.id) ? ' ✓' : ''}</button>`).join('')
@@ -1244,30 +1305,23 @@ function renderBoard() {
 
 /** 경기 모드(S4) — 세로 폰·한 손 조작·야외 고대비. 준비 모드와 같은 bd 상태를 그대로 쓴다 */
 function renderBoardLive(root) {
+  const presetsLeft = $('.live-presets', root)?.scrollLeft || 0;   // 지시를 누를 때마다 다시 그려도 스크롤 자리 유지
   const opp = bd.opponentId ? store.opponents.byId(bd.opponentId) : null;
   const g = bd.matchId ? store.matches.byId(bd.matchId) : null;
   root.innerHTML = `
     <div class="board-live" id="bd-live-root">
       <div class="live-topbar">
         <button type="button" class="livebtn lockbtn${bd.locked ? ' on' : ''}" id="bd-lock" aria-pressed="${bd.locked}">${bd.locked ? '🔒 잠김' : '🔓 잠금'}</button>
-        <div class="live-title">${esc(opp ? opp.name : '상대 미정')}${g ? ` · ${esc(fmtDate(g.date))}` : ''}</div>
+        <div class="live-title">${esc(opp ? opp.name : '상대 미정')}${g ? ` · ${Number(g.date.slice(5, 7))}/${Number(g.date.slice(8, 10))}` : ''}</div>
         <button type="button" class="livebtn ghost" id="bd-exit-live">준비 모드로</button>
       </div>
       <div class="pitch-wrap live-pitch" id="bd-pitch">
         ${boardPitchSVG()}
         <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
-        <div id="bd-pins" style="position:absolute;inset:0">
-          ${bd.oppPins.map(oppPinHTML).join('')}
-          ${bd.ourPins.map(ourPinHTML).join('')}
-          ${ballHTML()}
-        </div>
+        <div id="bd-pins" style="position:absolute;inset:0">${boardPinsHTML()}</div>
+        ${boardOverlayHTML()}
         ${bd.locked ? '<div class="live-lock-veil">잠김 — 잠금 버튼을 길게 눌러 해제</div>' : ''}
       </div>
-      ${bd.mode === 'sub' ? '<div class="live-hint">우리 선수를 눌러 교체하세요</div>' : ''}
-      ${bd.mode === 'arrow' ? `<div class="row" style="justify-content:center;gap:8px;margin:6px 0">
-          <button class="toolbtn" data-astyle="solid" aria-pressed="${bd.arrowStyle === 'solid'}">실선</button>
-          <button class="toolbtn" data-astyle="dashed" aria-pressed="${bd.arrowStyle === 'dashed'}">점선</button>
-        </div>` : ''}
       <div class="live-presets">
         ${Object.entries(QUICK_INSTRUCTION_PRESETS).map(([k, p]) => `<button type="button" class="livebtn preset" data-preset="${k}">${esc(p.label)}</button>`).join('')}
       </div>
@@ -1276,78 +1330,157 @@ function renderBoardLive(root) {
         <button type="button" class="livebtn big" id="bd-live-arrow" aria-pressed="${bd.mode === 'arrow'}">화살표</button>
         <button type="button" class="livebtn big" id="bd-live-clear">지우기</button>
       </div>
-      <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION}</div>
     </div>`;
+  const pr = $('.live-presets', root);
+  if (pr) pr.scrollLeft = presetsLeft;
+}
+
+/** 보드 위 작은 조작: 상대 보기 스위치 + 화살표 실선/점선 + 안내. 레이아웃을 밀지 않게 잔디 위에 얹는다 */
+function boardOverlayHTML() {
+  const live = bd.viewMode === 'live';
+  const right = bd.mode === 'arrow'
+    ? `<button type="button" class="bd-pill" data-astyle="solid" aria-pressed="${bd.arrowStyle === 'solid'}">실선</button>
+       <button type="button" class="bd-pill" data-astyle="dashed" aria-pressed="${bd.arrowStyle === 'dashed'}">점선</button>`
+    : (live && bd.mode === 'sub' ? '<span class="bd-pill note">선수를 눌러 교체</span>' : '');
+  const pending = bd.pendingCand ? store.members.byId(bd.pendingCand) : null;
+  return `<div class="bd-overlay">
+      <button type="button" class="bd-pill bd-opp-toggle" id="bd-opp-toggle" aria-pressed="${oppVisible()}"><span class="mini-switch"></span>상대 보기</button>
+      <span class="bd-overlay-r">${right}</span>
+    </div>
+    ${pending ? `<div class="bd-pending"><span>${esc(pending.name)} — 넣을 자리를 누르세요</span>
+      <button type="button" id="bd-pending-cancel">취소</button></div>` : ''}`;
 }
 
 function renderBoardPrep(root, matches) {
-  const opponents = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   root.innerHTML = `
-    <div class="row" style="margin:10px 0 8px;gap:8px">
-      <div class="seg-wide" id="bd-view-mode" style="flex:0 0 auto">
-        <button type="button" data-vm="prep" aria-pressed="true">준비 모드</button>
-        <button type="button" data-vm="live" aria-pressed="false">경기 모드</button>
-      </div>
-    </div>
-    <div class="board-layout">
-      <div class="board-main">
-        <div class="selectrow">
-          <select id="bd-match"><option value="" ${!bd.matchId ? 'selected' : ''}>임시 라인업 (경기 미선택)</option>
-            ${matches.map((m) => {
+    <div class="bd-screen">
+      <div class="bd-top">
+        <select id="bd-match" aria-label="경기 선택"><option value="" ${!bd.matchId ? 'selected' : ''}>임시 라인업 (경기 미선택)</option>
+          ${matches.map((m) => {
     const o = m.opponentId ? store.opponents.byId(m.opponentId) : null;
     return `<option value="${m.id}" ${bd.matchId === m.id ? 'selected' : ''}>${esc(fmtDate(m.date))} · ${o ? esc(o.name) : '상대 미정'}${m.boardSnapshot ? ' ★' : ''}</option>`;
   }).join('')}</select>
+        <div class="seg-wide" id="bd-view-mode">
+          <button type="button" data-vm="prep" aria-pressed="true">준비</button>
+          <button type="button" data-vm="live" aria-pressed="false">경기</button>
         </div>
-        <div class="row" style="margin:6px 0 10px">
-          <select id="bd-opponent" class="grow"><option value="">상대 직접 선택 안 함</option>
-            ${opponents.map((o) => `<option value="${o.id}" ${bd.opponentId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>
-        </div>
-        <div class="row" style="margin-bottom:8px">
-          <select id="bd-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.formation === f ? 'selected' : ''}>우리 ${f}</option>`).join('')}</select>
-          <select id="bd-opp-formation" style="max-width:120px">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.oppFormation === f ? 'selected' : ''}>상대 ${f}</option>`).join('')}</select>
-        </div>
-        <div class="row" style="margin-bottom:10px;gap:8px">
-          <button type="button" class="btn grow" id="bd-playbook-open">기본 전술 불러오기</button>
-          <button type="button" class="btn grow ghost" id="bd-playbook-save">내 전술로 저장</button>
-        </div>
-        ${bd.mode === 'move' ? '<div class="cand-hint" style="margin:0 0 6px">우리 선수 핀을 누르면 선수를 지정하고, 끌면 자리를 옮깁니다</div>' : ''}
-        <div class="pitch-wrap" id="bd-pitch">
-          ${boardPitchSVG()}
-          <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
-          <div id="bd-pins" style="position:absolute;inset:0">
-            ${bd.oppPins.map(oppPinHTML).join('')}
-            ${bd.ourPins.map(ourPinHTML).join('')}
-            ${ballHTML()}
+        <button type="button" class="toolbtn bd-more" id="bd-more" aria-label="더보기">⋯</button>
+      </div>
+      <div class="board-layout">
+        <div class="bd-stage">
+          <div class="pitch-wrap" id="bd-pitch">
+            ${boardPitchSVG()}
+            <svg class="draw-layer on" id="bd-arrows" viewBox="0 0 100 150" preserveAspectRatio="none" style="pointer-events:none">${arrowsSVG()}</svg>
+            <div id="bd-pins" style="position:absolute;inset:0">${boardPinsHTML()}</div>
+            ${boardOverlayHTML()}
           </div>
         </div>
-        <div class="tool-row">
-          <button class="toolbtn" id="bd-m-move" aria-pressed="${bd.mode === 'move'}">이동</button>
-          <button class="toolbtn" id="bd-m-arrow" aria-pressed="${bd.mode === 'arrow'}">화살표</button>
-          ${bd.mode === 'arrow' ? `
-            <button class="toolbtn" data-astyle="solid" aria-pressed="${bd.arrowStyle === 'solid'}">실선</button>
-            <button class="toolbtn" data-astyle="dashed" aria-pressed="${bd.arrowStyle === 'dashed'}">점선</button>` : ''}
-          <span style="flex:1"></span>
-          <button class="toolbtn" id="bd-undo" ${bd.arrows.length ? '' : 'disabled style="opacity:.4"'}>되돌리기</button>
-          <button class="toolbtn" id="bd-clear" ${bd.arrows.length ? '' : 'disabled style="opacity:.4"'}>전체 지우기</button>
-        </div>
-        <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-          ${Object.entries(SET_PIECE_TEMPLATES).map(([k, sp]) => `<button class="toolbtn" data-setpiece="${k}">${esc(sp.label)}</button>`).join('')}
-          <button class="toolbtn" id="bd-ball-clear">공 지우기</button>
-        </div>
-        <div class="row" style="margin-top:12px">
-          <button class="btn grow" id="bd-reset">다시 배치</button>
-          <button class="btn grow primary" id="bd-save" ${bd.matchId ? '' : 'disabled style="opacity:.5"'}>보드 저장</button>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <button class="btn block grow" id="bd-png">보드 이미지 저장(PNG)</button>
-        </div>
-        ${!bd.matchId ? '<div class="dim" style="margin-top:6px;font-size:12px">경기를 선택하면 이 배치를 경기 기록에 저장할 수 있습니다.</div>' : ''}
-        <div class="footer-note">${esc(APP_NAME)} · ${APP_VERSION}</div>
+        <div class="board-panel" id="bd-panel">${boardCandPanelHTML()}</div>
       </div>
-      <button type="button" class="board-panel-toggle" id="bd-panel-toggle" aria-expanded="${bd.panelOpen}">라인업 후보 · 상대 메모 ${bd.panelOpen ? '접기 ▾' : '펼치기 ▸'}</button>
-      <div class="board-panel${bd.panelOpen ? ' open' : ''}" id="bd-panel">${boardCandPanelHTML()}</div>
+      <div class="bd-bottom">
+        <button class="toolbtn" id="bd-m-move" aria-pressed="${bd.mode === 'move'}">이동</button>
+        <button class="toolbtn" id="bd-m-arrow" aria-pressed="${bd.mode === 'arrow'}">화살표</button>
+        <button class="toolbtn bd-players" id="bd-players">선수</button>
+        <button class="toolbtn" id="bd-undo" ${bd.arrows.length ? '' : 'disabled style="opacity:.4"'}>되돌리기</button>
+        <button class="toolbtn save${bd.matchId ? '' : ' off'}" id="bd-save">저장</button>
+      </div>
     </div>`;
+  // 도구를 치우면서 상시 안내문도 뺐다 — 핀 탭(선수 지정)을 모르고 지나치지 않게 기기당 한 번 알려 준다
+  if (ui.tab === 'board' && !prefs.boardHintSeen) {
+    writePrefs({ boardHintSeen: true });
+    toast('선수 핀을 누르면 선수 지정, 끌면 자리 이동');
+  }
 }
+
+/** ⋯ 시트 — 자주 안 쓰는 보드 도구 모음. 시트를 닫아야 결과가 보이는 동작은 닫은 뒤 실행한다 */
+function boardMoreSheet() {
+  const opponents = store.opponents.all().slice().sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  openModal(`
+    <h3>전술보드 도구</h3>
+    <div class="field"><label>상대</label>
+      <select id="bd-opponent"><option value="">상대 직접 선택 안 함</option>
+        ${opponents.map((o) => `<option value="${o.id}" ${bd.opponentId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></div>
+    <div class="row">
+      <div class="field grow"><label>우리 포메이션</label>
+        <select id="bd-formation">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.formation === f ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+      <div class="field grow"><label>상대 포메이션</label>
+        <select id="bd-opp-formation">${FORMATION_PRESETS.map((f) => `<option value="${f}" ${bd.oppFormation === f ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+    </div>
+    ${oppVisible() ? '' : '<div class="cand-hint">상대 핀은 보드의 "상대 보기"를 켜면 보입니다.</div>'}
+    <div class="section-title" style="margin-top:6px">전술</div>
+    <div class="row">
+      <button type="button" class="btn grow" id="bd-playbook-open" data-more="playbook-open">기본 전술 불러오기</button>
+      <button type="button" class="btn grow ghost" id="bd-playbook-save" data-more="playbook-save">내 전술로 저장</button>
+    </div>
+    <div class="section-title">세트피스</div>
+    <div class="row wrap">
+      ${Object.entries(SET_PIECE_TEMPLATES).map(([k, sp]) => `<button class="toolbtn" data-more="setpiece" data-setpiece="${k}">${esc(sp.label)}</button>`).join('')}
+      <button class="toolbtn" id="bd-ball-clear" data-more="ball-clear">공 지우기</button>
+    </div>
+    <div class="section-title">배치</div>
+    <div class="row">
+      <button class="btn grow" id="bd-reset" data-more="reset">다시 배치</button>
+      <button class="btn grow" id="bd-clear" data-more="clear" ${bd.arrows.length ? '' : 'disabled'}>화살표 전체 지우기</button>
+    </div>
+    <button class="btn block" id="bd-png" data-more="png" style="margin-top:8px">보드 이미지 저장(PNG)</button>
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m) => {
+    m.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="close"]')) return closeModal();
+      const b = e.target.closest('[data-more]');
+      if (!b) return;
+      const act = b.dataset.more;
+      const key = b.dataset.setpiece;
+      if (act === 'png') { closeModal(); exportBoardPNG(); return; }   // 공유 창은 탭 직후에 열어야 막히지 않는다
+      afterModalClose(() => runBoardMoreAction(act, key));
+    });
+  });
+}
+async function runBoardMoreAction(act, key) {
+  if (act === 'playbook-open') return playbookLibrarySheet();
+  if (act === 'playbook-save') return savePlaybookModal();
+  if (act === 'setpiece') {
+    const tpl = SET_PIECE_TEMPLATES[key];
+    if (tpl) { bd.ball = { ...tpl.ball }; bd.setPiece = key; bd.dirty = true; toast(tpl.hint); renderBoard(); }
+    return;
+  }
+  if (act === 'ball-clear') { bd.ball = null; bd.setPiece = null; bd.dirty = true; return renderBoard(); }
+  if (act === 'reset') {
+    resetBoardLayout();
+    toast('포메이션 기본 배치로 되돌렸습니다');
+    return renderBoard();
+  }
+  if (act === 'clear') {
+    if (!bd.arrows.length) return;
+    if (await confirmDialog({ title: '그린 화살표를 모두 지울까요?', ok: '지우기', danger: true })) { bd.arrows = []; bd.dirty = true; renderBoard(); }
+  }
+}
+/** 상대를 고르면 상대 포메이션도 따라 바뀐다 — 열려 있는 ⋯ 시트의 선택창을 맞춘다 */
+function syncBoardMoreSheet() {
+  const f = $('#bd-formation'); if (f) f.value = bd.formation;
+  const o = $('#bd-opp-formation'); if (o) o.value = bd.oppFormation;
+}
+
+/** "선수" 시트 — 라인업 후보·상대 메모. 칩을 끌면 시트가 비켜서 보드 자리에 바로 놓을 수 있다 */
+function boardPlayersSheet() {
+  openModal(`
+    <h3>선수</h3>
+    <div id="bd-players-body">${boardCandPanelHTML()}</div>
+    <div class="foot"><button class="btn ghost" data-act="close">닫기</button></div>`, (m, back) => {
+    m.addEventListener('click', (e) => { if (e.target.closest('[data-act="close"]')) closeModal(); });
+    bindCandDrag(m, {
+      onDragStart: () => back.classList.add('drag-through'),
+      onDragEnd: () => {
+        back.classList.remove('drag-through');
+        const box = $('#bd-players-body', m);
+        if (box) box.innerHTML = boardCandPanelHTML();   // 배치 표시(✓) 갱신
+      },
+    });
+  });
+}
+
+/* v1.4.0: 길게 눌러 풀면 다시 그려진 새 버튼이 손 떼는 pointerup 을 받아 곧바로 다시 잠갔다(풀리지 않음, v1.3.3 재현).
+ * 해제 표시를 버튼 밖에 둬서 다시 그려도 이어지게 한다 */
+let lockReleasedByHold = false;
 
 /* ---------- 포인터: 핀/공 드래그 · 화살표 · 후보 드래그 투입 ---------- */
 function bindBoardPointer() {
@@ -1360,16 +1493,11 @@ function bindBoardPointer() {
       y: Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)),
     };
   };
-  const redrawPins = () => {
-    const box = $('#bd-pins');
-    if (!box) return;
-    box.innerHTML = `${bd.oppPins.map(oppPinHTML).join('')}${bd.ourPins.map(ourPinHTML).join('')}${ballHTML()}`;
-  };
   const redrawArrows = () => {
     const svg = $('#bd-arrows');
     if (svg) svg.innerHTML = arrowsSVG();
-    const u = $('#bd-undo'); const c = $('#bd-clear');
-    [u, c].forEach((b) => { if (b) { b.disabled = !bd.arrows.length; b.style.opacity = bd.arrows.length ? '' : '.4'; } });
+    const u = $('#bd-undo');
+    if (u) { u.disabled = !bd.arrows.length; u.style.opacity = bd.arrows.length ? '' : '.4'; }
   };
 
   $('#bd-pins')?.addEventListener('pointerdown', (e) => {
@@ -1464,26 +1592,34 @@ function bindBoardPointer() {
   // 경기 모드 — 잠금 버튼: 짧게 누르면 잠기고, 잠긴 상태에서는 길게(600ms) 눌러야 풀린다
   const lockBtn = $('#bd-lock');
   if (lockBtn) {
-    let holdTimer = null; let longPressed = false;
+    let holdTimer = null;
     lockBtn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      longPressed = false;
-      if (bd.locked) holdTimer = setTimeout(() => { longPressed = true; bd.locked = false; toast('잠금 해제'); renderBoard(); }, 600);
+      lockReleasedByHold = false;
+      if (bd.locked) holdTimer = setTimeout(() => { lockReleasedByHold = true; bd.locked = false; toast('잠금 해제'); renderBoard(); }, 600);
     });
     const finishHold = () => {
       if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-      if (!bd.locked && !longPressed) { bd.locked = true; toast('보드 잠금 — 길게 눌러 해제'); renderBoard(); }
+      if (!bd.locked && !lockReleasedByHold) { bd.locked = true; toast('보드 잠금 — 길게 눌러 해제'); renderBoard(); }
     };
     lockBtn.addEventListener('pointerup', finishHold);
     lockBtn.addEventListener('pointercancel', finishHold);
   }
 
-  // 후보 선수 → 보드 자리로 드래그 투입 (포인터 기반, 터치 포함)
-  $('#bd-panel')?.addEventListener('pointerdown', (e) => {
+  // 후보 선수 → 보드 자리로 드래그 투입 (넓은 화면의 옆 패널. 폰은 "선수" 시트에서 같은 함수를 쓴다)
+  const sidePanel = $('#bd-panel');
+  if (sidePanel) bindCandDrag(sidePanel);
+}
+
+/** 후보 칩 드래그 (포인터 기반, 터치 포함) — 칩이 시트 안에 있으면 끄는 동안 시트를 비켜 준다 */
+function bindCandDrag(rootEl, { onDragStart, onDragEnd } = {}) {
+  rootEl.addEventListener('pointerdown', (e) => {
     const chip = e.target.closest('.cand-chip');
     if (!chip) return;
     e.preventDefault();
     const memberId = chip.dataset.cand;
+    const start = { x: e.clientX, y: e.clientY };
+    let dragging = false;
     const ghost = document.createElement('div');
     ghost.className = 'cand-ghost';
     ghost.textContent = chip.textContent.replace(' ✓', '');
@@ -1493,6 +1629,8 @@ function bindBoardPointer() {
     let overIdx = -1;
     const move = (ev) => {
       moveGhost(ev);
+      if (!dragging && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) >= 8) { dragging = true; onDragStart?.(); }
+      if (!dragging) return;
       const el = document.elementFromPoint(ev.clientX, ev.clientY);
       const pin = el?.closest?.('.pin[data-side="us"]');
       $$('.pin.us.drop-target').forEach((n) => n.classList.remove('drop-target'));
@@ -1502,17 +1640,19 @@ function bindBoardPointer() {
     const finish = () => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
-      document.removeEventListener('pointercancel', finish);
+      document.removeEventListener('pointercancel', cancel);
       ghost.remove();
       $$('.pin.us.drop-target').forEach((n) => n.classList.remove('drop-target'));
     };
+    const cancel = () => { finish(); if (dragging) onDragEnd?.(); };
     const up = () => {
       finish();
       if (overIdx >= 0) assignCandidateToSlot(memberId, overIdx);
+      if (dragging) { swallowNextClick(); onDragEnd?.(); }   // 끌기를 마친 뒤의 click 이 칩 "고르기"로 번지지 않게
     };
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
-    document.addEventListener('pointercancel', finish);
+    document.addEventListener('pointercancel', cancel);
   });
 }
 
@@ -1732,7 +1872,7 @@ async function exportBoardPNG() {
     x.setLineDash([]);
   }
   x.fillStyle = '#2b7f52';
-  bd.oppPins.forEach((p) => {
+  (oppVisible() ? bd.oppPins : []).forEach((p) => {   // 화면에 보이는 그대로 저장한다(상대 보기 꺼짐 = 우리만)
     const px = sx(p.x); const py = oy + (p.y / 100) * PH;
     x.beginPath(); x.arc(px, py, 17, 0, Math.PI * 2);
     x.strokeStyle = 'rgba(255,255,255,.9)'; x.lineWidth = 2.4; x.setLineDash([4, 3]); x.stroke(); x.setLineDash([]);
@@ -1999,13 +2139,29 @@ function statusChip(s) { return `<span class="chip">${esc(s)}</span>`; }
 
 function matchRow(g) {
   const o = g.opponentId ? store.opponents.byId(g.opponentId) : null;
-  return `<button type="button" class="match-card" data-match-open="${g.id}">
-    <div class="match-top"><b>${esc(fmtDate(g.date))}</b>${statusChip(g.status)}</div>
-    <div class="match-mid"><span class="opp">${o ? esc(o.name) : '상대 미정'}</span>
-      ${g.result ? `<b class="score">${g.result.gf} : ${g.result.ga}</b>` : ''}
-      <span class="ha">${g.home === false ? '원정' : '홈'}</span></div>
-    ${g.place ? `<div class="match-place">${esc(g.place)}</div>` : ''}
-  </button>`;
+  return `<div class="match-card-wrap">
+    <button type="button" class="match-card" data-match-open="${g.id}">
+      <div class="match-top"><b>${esc(fmtDate(g.date))}</b>${statusChip(g.status)}</div>
+      <div class="match-mid"><span class="opp">${o ? esc(o.name) : '상대 미정'}</span>
+        ${g.result ? `<b class="score">${g.result.gf} : ${g.result.ga}</b>` : ''}
+        <span class="ha">${g.home === false ? '원정' : '홈'}</span></div>
+      ${g.place ? `<div class="match-place">${esc(g.place)}</div>` : ''}
+    </button>
+    <button type="button" class="match-board-link" data-board-open="${g.id}">전술보드 ▸</button>
+  </div>`;
+}
+
+/** 경기 카드 → 그 경기의 전술보드. 다른 경기 보드에 저장 안 한 변경이 있으면 먼저 묻는다 */
+async function openBoardForMatch(id) {
+  if (bd.matchId !== id || !bd.loadedFrom) {
+    if (bd.dirty && bd.loadedFrom) {
+      if (!await confirmDialog({ title: '저장하지 않은 보드 변경이 있습니다', body: '이 경기 보드로 넘어가면 지금 보드의 변경은 사라집니다.', ok: '넘어가기', danger: true })) return;
+    }
+    if (bd.viewMode === 'live') { bd.viewMode = 'prep'; releaseWakeLock(); }
+    bd.pendingCand = null;
+    loadBoardFor(id);
+  }
+  switchTab('board');
 }
 
 function renderMatch() {
@@ -2857,6 +3013,7 @@ function switchTab(tab, { push = true } = {}) {
   if (!TABS[tab]) tab = 'ourteam';
   if (tab !== 'ourteam') ui.rosterDone = null;   // 안내 배너는 한 번만
   ui.tab = tab;
+  document.body.dataset.tab = tab;   // v1.4.0: 전술보드만 한 화면 맞춤 여백을 쓴다
   TABS[tab].render();
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
   $$('.tabbar button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
@@ -3469,23 +3626,18 @@ function bindEvents() {
 
     const go = t.closest('[data-go]');
     if (go) { switchTab(go.dataset.go); return; }
-    if (t.closest('#btn-settings')) {
-      switchTab('ourteam');
-      setTimeout(() => $('#settings-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
-      return;
-    }
+    if (t.closest('#btn-settings, [data-settings]')) return settingsScreen();
 
     /* ----- 오늘 출석 ----- */
-    const segb = t.closest('.seg [data-v]');
-    if (segb) {
-      const seg = segb.closest('.seg');
-      const memberId = seg.dataset.member;
+    const attb = t.closest('[data-att-member]');
+    if (attb) {
+      const memberId = attb.dataset.attMember;
       const g = todaySession({ create: true });
-      const cur = g.attendance[memberId];
-      const v = segb.dataset.v;
-      const next = cur === v ? null : v;
+      const next = attNext(g.attendance[memberId]);
       store.matches.setAttendance(g.id, memberId, next);
-      $$('[data-v]', seg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === next)));
+      attb.className = `att-btn ${next}`;
+      attb.textContent = ATT_LABEL[next];
+      attb.setAttribute('aria-label', attAria(store.members.byId(memberId)?.name || '', next));
       updateAttendCounts();
       return;
     }
@@ -3564,8 +3716,12 @@ function bindEvents() {
     }
 
     /* ----- 회원 ----- */
-    if (t.closest('#btn-add-member')) return memberModal(null);
-    if (t.closest('#btn-bulk-member')) return bulkModal();
+    if (t.closest('#btn-add-menu')) return addMemberMenu();
+    if (t.closest('#btn-strip-open')) return stripSheet();
+    if (t.closest('#btn-strip-close')) {
+      writePrefs({ stripHiddenUntil: Date.now() + STRIP_HIDE_MS });
+      return renderOurTeam();
+    }
     if (t.closest('#btn-toggle-inactive')) { ui.showInactive = !ui.showInactive; return renderOurTeam(); }
     if (t.closest('#btn-fix-names, #btn-fix-names-2')) return nameFixSheet();
     if (t.closest('#btn-rubric')) return rubricModal();
@@ -3582,6 +3738,8 @@ function bindEvents() {
 
     /* ----- 경기 (S2) ----- */
     if (t.closest('#btn-add-match')) return matchInfoModal(null);
+    const bo = t.closest('[data-board-open]');
+    if (bo) return openBoardForMatch(bo.dataset.boardOpen);
     const mo = t.closest('[data-match-open]');
     if (mo) return matchDetailModal(mo.dataset.matchOpen);
 
@@ -3617,33 +3775,21 @@ function bindEvents() {
     const astyle = t.closest('[data-astyle]');
     if (astyle) { if (bd.locked) return; bd.arrowStyle = astyle.dataset.astyle; return renderBoard(); }
     if (t.closest('#bd-undo')) { bd.arrows.pop(); bd.dirty = true; return renderBoard(); }
-    if (t.closest('#bd-clear')) {
-      if (!bd.arrows.length) return;
-      if (await confirmDialog({ title: '그린 화살표를 모두 지울까요?', ok: '지우기', danger: true })) { bd.arrows = []; bd.dirty = true; renderBoard(); }
-      return;
-    }
-    const sp = t.closest('[data-setpiece]');
-    if (sp) {
-      const tpl = SET_PIECE_TEMPLATES[sp.dataset.setpiece];
-      if (tpl) { bd.ball = { ...tpl.ball }; bd.setPiece = sp.dataset.setpiece; bd.dirty = true; toast(tpl.hint); renderBoard(); }
-      return;
-    }
-    if (t.closest('#bd-ball-clear')) { bd.ball = null; bd.setPiece = null; bd.dirty = true; return renderBoard(); }
-    if (t.closest('#bd-reset')) {
-      resetBoardLayout();
-      toast('포메이션 기본 배치로 되돌렸습니다');
+    if (t.closest('#bd-more')) return boardMoreSheet();
+    if (t.closest('#bd-players')) return boardPlayersSheet();
+    if (t.closest('#bd-opp-toggle')) {
+      if (bd.locked) return;
+      setOppVisible(!oppVisible());
       return renderBoard();
     }
+    if (t.closest('#bd-pending-cancel')) { bd.pendingCand = null; return renderBoard(); }
     if (t.closest('#bd-save')) return saveBoardSnapshot();
-    if (t.closest('#bd-png')) return exportBoardPNG();
-    if (t.closest('#bd-playbook-open')) return playbookLibrarySheet();
-    if (t.closest('#bd-playbook-save')) return savePlaybookModal();
-    if (t.closest('#bd-panel-toggle')) { bd.panelOpen = !bd.panelOpen; return renderBoard(); }
     const cand = t.closest('.cand-chip');
     if (cand) {
       // 드래그가 안 되는 환경(마우스 클릭만) 대비 — 탭 두 번(선수 선택 → 자리 선택)으로도 배치할 수 있게
       if (bd.pendingCand === cand.dataset.cand) { bd.pendingCand = null; return renderBoard(); }
       bd.pendingCand = cand.dataset.cand;
+      if (cand.closest('.modal')) closeModal();   // 선수 시트를 닫아야 보드의 자리가 보인다
       toast('보드에서 넣을 자리를 눌러 주세요');
       renderBoard();
       $('#bd-pitch')?.scrollIntoView({ block: 'center', behavior: 'smooth' });   // v1.3.3: 후보는 맨 아래, 잔디는 위 — 폰에서 자리가 안 보이던 문제
@@ -3676,15 +3822,9 @@ function bindEvents() {
 
     /* ----- 설정 ----- */
     if (t.closest('#btn-update-now')) return applyUpdateNow();
-    if (t.closest('#btn-export') || t.closest('#btn-backup-now')) return exportJSON();
+    if (t.closest('#btn-export') || t.closest('#btn-backup-now')) { exportJSON(); renderOurTeam(); return; }
     if (t.closest('#btn-move-data')) return moveDataSheet();
     if (t.closest('#btn-paste-import')) return pasteImportSheet();
-    if (t.closest('[data-envclose]') || t.closest('[data-backup-later]')) {
-      writeMeta({ bannerHiddenUntil: Date.now() + 24 * 60 * 60 * 1000 });
-      if (t.closest('[data-backup-later]')) writeMeta({ lastBackupAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() });
-      renderOurTeam();
-      return;
-    }
     const envh = t.closest('[data-envhelp]');
     if (envh) return envHelpSheet(envh.dataset.envhelp);
     if (t.closest('#btn-import')) return $('#file-import').click();
@@ -3729,6 +3869,7 @@ function bindEvents() {
     }
     if (e.target.id === 'bd-formation') { reflowOurFormation(e.target.value); bd.dirty = true; renderBoard(); }
     if (e.target.id === 'bd-opp-formation') { reflowOppFormation(e.target.value); bd.dirty = true; renderBoard(); }
+    if (/^bd-(opponent|formation|opp-formation)$/.test(e.target.id)) syncBoardMoreSheet();
   });
 
   document.addEventListener('input', (e) => {
@@ -4012,7 +4153,7 @@ async function startApp() {
 }
 
 window.__fc_hasAIKey = () => AI.hasKey();
-window.__fc = { store, ui, render, switchTab, renderOurTeam, todaySession, availableToday,
+window.__fc = { store, ui, bd, render, switchTab, renderOurTeam, todaySession, availableToday,
   currentEnv, bannerFor, readMeta, writeMeta, needsBackup, importText, moveDataSheet, pasteImportSheet,
   saveDraft, readDraft, clearDraft, hasAnyDraft, isBusyForUpdate, showUpdateBar, applyUpdateNow, updater,
   parseMemberLine, splitNamePosition, analyzeMemberName, nameCandidates, nameFixSheet,
